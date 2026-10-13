@@ -34,3 +34,7 @@ are slow there. Windows sleep also pauses WSL, and with it the crawl.
 
 Pseudo statuses in `fetched.tsv`: `0` network error, `-1` blocked by robots.txt,
 `-2` redirected off-site, `-3` gave up after repeated failures.
+
+### Diagram
+
+![Diagram](architecture_diagram.png)
