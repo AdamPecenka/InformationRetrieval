@@ -56,6 +56,40 @@ Mined from the biography (rule based, the whole sentence is kept for each hit):
 `world_records_text`. `world_records` comes from "List mentions". All patterns
 are in `constants.py`.
 
+### Indexer
+`python main.py index`
+
+Builds an inverted index from `data/extracted/athletes.tsv` (one athlete = one
+document, the indexed columns are `INDEX_TEXT_COLUMNS` in `constants.py`). The
+text of the athlete's rows in `results.tsv` (`INDEX_RESULT_COLUMNS`, joined on
+`athlete_id`) is added to the same document. It is rebuilt from scratch on every
+run. Tokens are lower-cased, accents are stripped,
+
+| Path | Content |
+|---|---|
+| `data/index/dictionary.tsv` | `term`, `df`, `offset` of its postings list in `postings.bin` (sorted by term) |
+| `data/index/postings.bin` | per term `df` postings, each a doc id and the tf (two little endian uint32), ordered by doc id |
+| `data/index/docs.tsv` | `doc_id`, `athlete_id`, `full_name`, `length` (number of tokens), `norm` (Euclidean length of the document's log-tf vector) |
+The three files are swapped in together at the end of the build.
+
+### Search
+`python main.py search swimming gold --top 10 --rank all`
+
+The dictionary and the document table are loaded into memory, the postings
+lists are read from disk. `--rank` picks the ranking, the default `all` prints
+every ranking one after the other. The two tf-idf rankings follow the lecture
+example:
+
+- query weight `w(t,q) = tf(t,q) * idf(t)`
+- document weight `w(t,d) = (1 + log10 tf(t,d)) / ||d||`
+- `Score(q,d) = sum over t in q of w(t,q) * w(t,d)`
+
+| `--rank` | Formula |
+|---|---|
+| `idf` | tf-idf with `idf = log10(N / df)` |
+| `prob` | tf-idf with the probabilistic `idf = max(0, log10((N - df) / df))` |
+| `bm25` | Okapi BM25, `idf = max(0, log10((N - df + 0.5) / (df + 0.5)))`, `k1 = 1.2`, `b = 0.75` (`BM25_K1`, `BM25_B` in `constants.py`), document length in tokens |
+
 ### Diagram
 
 ![Diagram](architecture_diagram.png)

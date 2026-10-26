@@ -274,6 +274,53 @@ OCCUPATION_RULES: list[tuple[str, re.Pattern[str]]] = [
     ),
 ]
 
+# ---- indexer ----
+INDEX_DIR: str = os.path.join(DATA_DIR, "index")
+INDEX_DICTIONARY_PATH: str = os.path.join(INDEX_DIR, "dictionary.tsv")
+INDEX_POSTINGS_PATH: str = os.path.join(INDEX_DIR, "postings.bin")
+INDEX_DOCS_PATH: str = os.path.join(INDEX_DIR, "docs.tsv")
+INDEX_BLOCKS_DIR: str = os.path.join(INDEX_DIR, "blocks")
+# A SPIMI block goes to disk once it holds this many postings (stand-in for "memory is full").
+INDEX_BLOCK_MAX_POSTINGS: int = 2_000_000
+INDEX_PROGRESS_EVERY_DOCS: int = 5000
+
+TOKEN_PATTERN: re.Pattern[str] = re.compile(r"[^\W_]+")
+POSTING_FORMAT: str = "<II"  # one posting: doc id, tf (little endian uint32 each)
+
+DICTIONARY_COLUMNS: list[str] = ["term", "df", "offset"]
+DOC_COLUMNS: list[str] = ["doc_id", "athlete_id", "full_name", "length", "norm"]
+
+# BM25 parameters (v prednaske: k1 = <1.2; 2>, b = 0.75).
+BM25_K1: float = 1.2
+BM25_B: float = 0.3
+
+# Columns of athletes.tsv whose text goes into the index (one document = one athlete).
+INDEX_TEXT_COLUMNS: list[str] = [
+    "full_name",
+    "used_name",
+    "other_names",
+    "original_name",
+    "nickname",
+    "roles",
+    "born_place",
+    "born_country",
+    "died_place",
+    "died_country",
+    "affiliations",
+    "noc_codes",
+    "noc_names",
+    "nationality_names",
+    "other_participations",
+    "personal_bests",
+    "post_career",
+    "career_events",
+    "list_mentions",
+    "biography",
+]
+
+# Columns of results.tsv whose text is added to the document of the athlete (joined on athlete_id).
+INDEX_RESULT_COLUMNS: list[str] = ["year", "season", "sport", "discipline", "event", "medal"]
+
 # ---- TSV layouts ----
 FRONTIER_COLUMNS: list[str] = ["url", "depth", "parent_url", "anchor_text", "discovered_at"]
 FETCHED_COLUMNS: list[str] = [

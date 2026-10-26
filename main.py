@@ -21,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="optional cap on fetches in this run (default: no limit)",
     )
+
     extract = subparsers.add_parser(
         "extract",
         help="parse the stored athlete pages into data/extracted/athletes.tsv and results.tsv (resumes by default)",
@@ -29,6 +30,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--rebuild",
         action="store_true",
         help="drop the existing TSVs and extract every page again",
+    )
+
+    subparsers.add_parser(
+        "index",
+        help="build the inverted index from data/extracted/athletes.tsv into data/index/ (always rebuilt from scratch)",
+    )
+    search = subparsers.add_parser(
+        "search",
+        help="rank athletes for a query with the index",
+    )
+    search.add_argument("query", nargs="+", help="query words")
+    search.add_argument("--top", type=int, default=10, help="number of results per ranking (default: 10)")
+    search.add_argument(
+        "--rank",
+        choices=["idf", "prob", "bm25", "all"],
+        default="all",
+        help="ranking: idf = tf-idf with log(N/df), prob = tf-idf with probabilistic idf, bm25, all = print every ranking (default)",
     )
 
     return parser
@@ -44,6 +62,13 @@ def main() -> int:
     if args.command == "extract":
         from extractor.engine import run_extractor
         return run_extractor(rebuild=args.rebuild)
+    if args.command == "index":
+        from indexer.engine import run_indexer
+        return run_indexer()
+
+    if args.command == "search":
+        from indexer.engine import run_search
+        return run_search(" ".join(args.query), top_k=args.top, method=args.rank)
 
     return 1
 
