@@ -35,6 +35,27 @@ are slow there. Windows sleep also pauses WSL, and with it the crawl.
 Pseudo statuses in `fetched.tsv`: `0` network error, `-1` blocked by robots.txt,
 `-2` redirected off-site, `-3` gave up after repeated failures.
 
+### Extractor
+`python main.py extract`
+
+Reads every `data/raw/athletes/{id}.html` and rewrites two files. The output is
+written to `.tmp` files and swapped in at the end, so a rerun or Ctrl-C never
+leaves a half written TSV. Parsing is regex only.
+
+| Path | Content |
+|---|---|
+| `data/extracted/athletes.tsv` | one row per athlete: names, born/died, measurements, affiliations, NOC, nationality, medals, other participations, list mentions, biography and the mined fields |
+| `data/extracted/results.tsv` | one row per event the athlete competed in: games, year, season, sport, discipline, event, team, position, medal. Joins to `athletes.tsv` on `athlete_id` |
+
+Sections are found by their `<h2>` title, the results columns through the table
+header. Multi-valued fields are joined with ` | `. Pages with a missing section
+are reported as `[!]` (first ones per page, then a summary count).
+
+Mined from the biography (rule based, the whole sentence is kept for each hit):
+`career_events`, `post_career` + `post_career_roles`, `other_sports`,
+`world_records_text`. `world_records` comes from "List mentions". All patterns
+are in `constants.py`.
+
 ### Diagram
 
 ![Diagram](architecture_diagram.png)

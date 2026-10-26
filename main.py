@@ -21,6 +21,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="optional cap on fetches in this run (default: no limit)",
     )
+    extract = subparsers.add_parser(
+        "extract",
+        help="parse the stored athlete pages into data/extracted/athletes.tsv and results.tsv (resumes by default)",
+    )
+    extract.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="drop the existing TSVs and extract every page again",
+    )
+
     return parser
 
 def main() -> int:
@@ -30,6 +40,10 @@ def main() -> int:
     if args.command == "crawl":
         from crawler.engine import run_crawler
         return run_crawler(max_pages=args.max_pages)
+
+    if args.command == "extract":
+        from extractor.engine import run_extractor
+        return run_extractor(rebuild=args.rebuild)
 
     return 1
 

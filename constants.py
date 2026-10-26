@@ -20,7 +20,6 @@ ATHLETE_URL_PATTERN: re.Pattern[str] = re.compile("^" + re.escape(BASE_URL) + r"
 # ---- which athlete pages are stored ----
 # A page is stored when it has a "Biography" section AND at least one medal.
 BIO_HEADING_PATTERN: re.Pattern[str] = re.compile(r"<h2>\s*Biography\s*</h2>")
-MEDAL_SPAN_PATTERN: re.Pattern[str] = re.compile(r'<span class="(?:Gold|Silver|Bronze)">')
 
 # ---- crawler identity ----
 # Set CONTACT to something that lets the site owner reach you (school email,
@@ -49,6 +48,231 @@ BACKOFF_CAP_SECONDS: float = 3600.0
 
 # ---- progress output ----
 PROGRESS_EVERY_FETCHES: int = 25
+
+# ---- extractor: output ----
+EXTRACTED_DIR: str = os.path.join(DATA_DIR, "extracted")
+ATHLETES_TSV_PATH: str = os.path.join(EXTRACTED_DIR, "athletes.tsv")
+RESULTS_TSV_PATH: str = os.path.join(EXTRACTED_DIR, "results.tsv")
+EXTRACT_PROGRESS_EVERY_PAGES: int = 1000
+EXTRACT_MAX_PAGE_WARNINGS: int = 10
+LIST_SEPARATOR: str = " | "
+
+ATHLETE_COLUMNS: list[str] = [
+    "athlete_id",
+    "full_name",
+    "given_names",
+    "family_name",
+    "used_name",
+    "other_names",
+    "original_name",
+    "nickname",
+    "sex",
+    "roles",
+    "born_date",
+    "born_place",
+    "born_country",
+    "died_date",
+    "died_place",
+    "died_country",
+    "height_cm",
+    "weight_kg",
+    "affiliations",
+    "noc_codes",
+    "noc_names",
+    "nationality_codes",
+    "nationality_names",
+    "medals_gold",
+    "medals_silver",
+    "medals_bronze",
+    "medals_total",
+    "other_participations",
+    "personal_bests",
+    "world_records",
+    "post_career",
+    "career_events",
+    "list_mentions",
+    "biography",
+]
+
+RESULT_COLUMNS: list[str] = [
+    "athlete_id",
+    "games",
+    "year",
+    "season",
+    "sport",
+    "discipline",
+    "event",
+    "team",
+    "position",
+    "medal",
+]
+
+# ---- extractor: page structure ----
+# Section titles (<h2>, lower-cased) of a stored athlete page.
+SECTION_BIOGRAPHICAL: str = "biographical information"
+SECTION_BIOGRAPHY: str = "biography"
+SECTION_RESULTS: str = "results"
+SECTION_OTHER_PARTICIPATIONS: str = "other participations"
+SECTION_LIST_MENTIONS: str = "list mentions"
+
+# Row labels of the "Biographical information" table.
+BIODATA_LABELS: frozenset[str] = frozenset(
+    {
+        "Roles",
+        "Sex",
+        "Full name",
+        "Used name",
+        "Other names",
+        "Original name",
+        "Nickname",
+        "Born",
+        "Died",
+        "Measurements",
+        "Affiliations",
+        "NOC",
+        "Nationality",
+    }
+)
+
+MAX_COLSPAN: int = 12
+BULLET: str = "\u2022"
+
+COMMENT_PATTERN: re.Pattern[str] = re.compile(r"(?s)<!--.*?-->")
+SCRIPT_STYLE_PATTERN: re.Pattern[str] = re.compile(r"(?is)<(script|style)\b.*?</\1>")
+TAG_PATTERN: re.Pattern[str] = re.compile(r"<[^>]+>")
+H2_PATTERN: re.Pattern[str] = re.compile(r"(?is)<h2\b[^>]*>(.*?)</h2>")
+TABLE_PATTERN: re.Pattern[str] = re.compile(r"(?is)<table\b[^>]*>(.*?)</table>")
+ROW_PATTERN: re.Pattern[str] = re.compile(r"(?is)<tr\b[^>]*>(.*?)</tr>")
+CELL_PATTERN: re.Pattern[str] = re.compile(r"(?is)<(t[hd])\b([^>]*)>(.*?)</\1>")
+COLSPAN_PATTERN: re.Pattern[str] = re.compile(r"(?i)colspan\s*=\s*[\"']?(\d+)")
+PARAGRAPH_PATTERN: re.Pattern[str] = re.compile(r"(?is)<p\b[^>]*>(.*?)</p>")
+LIST_ITEM_PATTERN: re.Pattern[str] = re.compile(r"(?is)<li\b[^>]*>(.*?)</li>")
+ANCHOR_PATTERN: re.Pattern[str] = re.compile(r"(?is)<a\b[^>]*>(.*?)</a>")
+COUNTRY_HREF_PATTERN: re.Pattern[str] = re.compile(r'href="/countries/([A-Za-z0-9]{2,3})"')
+
+# ---- extractor: values ----
+MEDAL_NAMES: tuple[str, ...] = ("Gold", "Silver", "Bronze")
+MEDAL_COUNT_PATTERN: re.Pattern[str] = re.compile(
+    r"(?is)<t[hd]\b[^>]*>(?:\s|<[^>]+>)*(Gold|Silver|Bronze|Total)(?:\s|<[^>]+>)*</t[hd]>"
+    r"\s*<t[hd]\b[^>]*>\s*(\d+)\s*</t[hd]>"
+)
+MEDAL_TEXT_PATTERN: re.Pattern[str] = re.compile(r"^(Gold|Silver|Bronze)$")
+MEDAL_SPAN_PATTERN: re.Pattern[str] = re.compile(r'<span class="(Gold|Silver|Bronze)">')
+
+HEIGHT_PATTERN: re.Pattern[str] = re.compile(r"(\d+)\s*cm")
+WEIGHT_PATTERN: re.Pattern[str] = re.compile(r"(\d+)\s*kg")
+AGED_PATTERN: re.Pattern[str] = re.compile(r"\s*\(aged\s+[^)]*\)")
+TRAILING_NOC_PATTERN: re.Pattern[str] = re.compile(r"^(?P<place>.*?)\s*\((?P<noc>[A-Z]{3})\)\s*$")
+DATE_DMY_PATTERN: re.Pattern[str] = re.compile(r"^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$")
+DATE_MY_PATTERN: re.Pattern[str] = re.compile(r"^([A-Za-z]+)\s+(\d{4})$")
+DATE_Y_PATTERN: re.Pattern[str] = re.compile(r"^(\d{4})$")
+MONTHS: dict[str, int] = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
+PERSONAL_BEST_PATTERN: re.Pattern[str] = re.compile(r"(?im)^\s*Personal Bests?\s*:\s*(.+?)\s*$")
+
+# Results table: "1980 Summer Olympics", "Basketball, Women (Olympic)", "Diving (Aquatics)".
+GAMES_PATTERN: re.Pattern[str] = re.compile(r"^(\d{4})\s+(Summer|Winter|Intercalated)\b")
+EVENT_STATUS_PATTERN: re.Pattern[str] = re.compile(r"\s*\([^()]*\)\s*$")
+DISCIPLINE_PATTERN: re.Pattern[str] = re.compile(r"^(?P<discipline>.*?)\s*\((?P<sport>[^()]*)\)\s*$")
+
+# ---- extractor: biography mining (rule based, one hit = one whole sentence) ----
+SENTENCE_BOUNDARY_PATTERN: re.Pattern[str] = re.compile(r"(?<=[.!?])\s+(?=[\"'(]?[A-Z0-9])")
+WORLD_RECORD_PATTERN: re.Pattern[str] = re.compile(r"\bworld[- ]records?\b", re.IGNORECASE)
+
+CAREER_EVENT_RULES: list[tuple[str, re.Pattern[str]]] = [
+    (
+        "retirement",
+        re.compile(
+            r"\bretir(?:ed|es|ing|ement)\b|\bended (?:his|her|their) (?:sporting |competitive )?career\b"
+            r"|\bquit (?:the sport|competing|competition)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "comeback",
+        re.compile(
+            r"\bcomeback\b|\bcame out of retirement\b|\bun-?retired\b"
+            r"|\breturned to (?:competition|competing|the sport|the national team|racing|the ring|the pool|the track)\b"
+            r"|\bresumed (?:his|her|their)? ?(?:career|competing|training)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "injury",
+        re.compile(
+            r"\binjur(?:y|ies|ed)\b|\bbroke (?:his|her|their) (?:leg|arm|ankle|wrist|collarbone|back|neck|foot|knee)\b"
+            r"|\bsurgery\b|\btorn\b",
+            re.IGNORECASE,
+        ),
+    ),
+]
+
+POST_CAREER_CUE_PATTERN: re.Pattern[str] = re.compile(
+    r"\bafter (?:his|her|their) (?:retirement|career|competitive career|sporting career|playing career)\b"
+    r"|\bafter retiring\b|\bupon (?:his|her|their) retirement\b|\bfollowing (?:his|her|their) retirement\b"
+    r"|\bpost-career\b|\bin later life\b|\blater (?:career|life|years)\b|\bwent into\b"
+    r"|\blater (?:became|worked|served|was elected|was appointed|moved|ran)\b"
+    r"|\bafter (?:leaving|quitting) (?:the )?(?:sport|competition)\b",
+    re.IGNORECASE,
+)
+ROLE_VERB_PATTERN: re.Pattern[str] = re.compile(
+    r"\b(?:became|worked as|served as|was elected|was appointed|ran for|opened (?:a|his|her)|founded)\b",
+    re.IGNORECASE,
+)
+OCCUPATION_RULES: list[tuple[str, re.Pattern[str]]] = [
+    (
+        "politician",
+        re.compile(
+            r"\bpolitic|member of parliament|\bsenator|\bmayor\b|\bminister\b|\bdeputy\b|\bcouncillor|\bgovernor\b|\bparliament|\blegislat",
+            re.IGNORECASE,
+        ),
+    ),
+    ("coach", re.compile(r"\bcoach|\btrainer\b|\bmanager\b|\breferee", re.IGNORECASE)),
+    (
+        "physician",
+        re.compile(r"\bphysician|\bdoctor\b|\bsurgeon|\bdentist|\bmedical (?:doctor|practice)|\b\w+ologist\b", re.IGNORECASE),
+    ),
+    ("engineer", re.compile(r"\bengineer", re.IGNORECASE)),
+    ("lawyer", re.compile(r"\blawyer|\battorney|\bjudge\b|\bprosecutor", re.IGNORECASE)),
+    ("teacher", re.compile(r"\bteacher|\bprofessor|\blecturer|\bschool principal", re.IGNORECASE)),
+    (
+        "businessperson",
+        re.compile(
+            r"\bbusiness(?:man|woman|person)|\bentrepreneur|\bran a (?:company|business)|\bfounded a company",
+            re.IGNORECASE,
+        ),
+    ),
+    ("military", re.compile(r"\bofficer\b|\bcolonel\b|\bmajor general\b|\barmy\b|\bnavy\b|\bair force\b", re.IGNORECASE)),
+    ("police", re.compile(r"\bpolice", re.IGNORECASE)),
+    (
+        "artist",
+        re.compile(r"\bactor\b|\bactress\b|\bsinger\b|\bmusician\b|\bpainter\b|\bartist\b|\bfilm\b", re.IGNORECASE),
+    ),
+    (
+        "journalist",
+        re.compile(r"\bjournalist|\bcommentator|\bbroadcaster|\bwriter\b|\bauthor\b", re.IGNORECASE),
+    ),
+    (
+        "sports official",
+        re.compile(
+            r"\bIOC member|\bpresident of the\b|\bchairman|\bsecretary[- ]general|\bfederation official"
+            r"|\bsports (?:official|administrator)|\badministrator\b",
+            re.IGNORECASE,
+        ),
+    ),
+]
 
 # ---- TSV layouts ----
 FRONTIER_COLUMNS: list[str] = ["url", "depth", "parent_url", "anchor_text", "discovered_at"]
