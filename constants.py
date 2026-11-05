@@ -277,7 +277,7 @@ OCCUPATION_RULES: list[tuple[str, re.Pattern[str]]] = [
 # ---- indexer ----
 INDEX_DIR: str = os.path.join(DATA_DIR, "index")
 INDEX_DICTIONARY_PATH: str = os.path.join(INDEX_DIR, "dictionary.tsv")
-INDEX_POSTINGS_PATH: str = os.path.join(INDEX_DIR, "postings.bin")
+INDEX_POSTINGS_PATH: str = os.path.join(INDEX_DIR, "postings.tsv")
 INDEX_DOCS_PATH: str = os.path.join(INDEX_DIR, "docs.tsv")
 INDEX_BLOCKS_DIR: str = os.path.join(INDEX_DIR, "blocks")
 # A SPIMI block goes to disk once it holds this many postings (stand-in for "memory is full").

@@ -10,7 +10,6 @@ import constants
 from common.log import log_add, log_alert, log_error, log_info, log_remove
 from common.tsv import format_row, read_rows
 from indexer.ranking import tf_weight
-from indexer.storage import POSTING
 from indexer.text import tokenize
 
 # Single-pass in-memory indexing (SPIMI), see the lecture "Single-pass in-memory indexing":
@@ -93,24 +92,20 @@ def _merge_blocks(block_paths: list[str], norms_squared: array) -> tuple[int, in
         dictionary_file.write(format_row(constants.DICTIONARY_COLUMNS))
 
         for term, group in itertools.groupby(merged, key=lambda entry: entry[0]):
-            buffer = bytearray()
-            df = 0
+            pairs: list[str] = []
 
             for _, _, postings in group:
                 for pair in postings.split(","):
                     doc_text, tf_text = pair.split(":")
-                    doc_id = int(doc_text)
-                    tf = int(tf_text)
+                    weight = tf_weight(int(tf_text))
+                    norms_squared[int(doc_text)] += weight * weight
+                    pairs.append(pair)
 
-                    buffer += POSTING.pack(doc_id, tf)
-                    weight = tf_weight(tf)
-                    norms_squared[doc_id] += weight * weight
-                    df += 1
-
-            postings_file.write(buffer)
-            dictionary_file.write(f"{term}\t{df}\t{offset}\n")
-            offset += len(buffer)
-            postings_total += df
+            line = f"{term}\t{','.join(pairs)}\n".encode("utf-8")
+            postings_file.write(line)
+            dictionary_file.write(f"{term}\t{len(pairs)}\t{offset}\n")
+            offset += len(line)
+            postings_total += len(pairs)
             terms += 1
 
     return terms, postings_total
