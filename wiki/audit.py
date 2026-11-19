@@ -1,30 +1,25 @@
-"""Recall check for the relevance filter, against the Olympedia athletes we actually have.
+"""Recall check of the relevance filter: pages titled like an Olympedia athlete that the filter dropped.
 
-Idea: take every Wikipedia page whose title equals an Olympedia athlete name (a disambiguation suffix
-like " (swimmer)" is ignored) and see which of those pages the filter dropped. A dropped page that
-still talks about the Olympics is a likely miss and is printed with a snippet.
-
-The title match is exact (lower-cased, no diacritic folding), so it finds a lower bound of the real
-name matches. It checks the filter, it is not the join.
+Dropped pages that still mention the Olympics are likely misses. Title match is exact (lower-cased,
+"(swimmer)" suffix ignored, no diacritic folding), so counts are a lower bound. Not the join.
 """
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from common.log import log_alert, log_error, log_info
+from regexes.join import JOIN_TITLE_SUFFIX_REGEX
+from regexes.wiki import WIKI_OLYMPIC_MENTION_REGEX, WIKI_SNIPPET_REGEX, WIKI_WHITESPACE_REGEX
 from wiki.dump import build_spark
 from wiki.inputs import require_dir, require_file
 
 REQUIRED_COLUMNS: list[str] = ["athlete_id", "used_name", "full_name"]
 EMPTY_NAMES: list[str] = ["", "null", "none"]
 SAMPLE_SIZE: int = 25
-SNIPPET_REGEX: str = r"(?is)(.{0,70}olymp.{0,70})"
-OLYMPIC_MENTION_REGEX: str = r"(?i)olymp"
 
 
 def read_athletes(spark: SparkSession, path: str) -> DataFrame:
-    # The project's TSV writer collapses tabs and newlines inside fields and never quotes,
-    # so quoting must be off or a stray " in a biography would swallow following rows.
+    # Our TSVs are never quoted: quote must be off, or a stray " in a biography swallows rows.
     return (
         spark.read
         .option("sep", "\t")
@@ -51,7 +46,7 @@ def title_candidates(pages: DataFrame, names: DataFrame) -> DataFrame:
     """(page_id, title, athlete_id) for pages whose title, minus a trailing (...), is an athlete name."""
     keyed = pages.withColumn(
         "name_key",
-        F.lower(F.trim(F.regexp_replace(F.col("title"), r"\s*\([^)]*\)$", ""))),
+        F.lower(F.trim(F.regexp_replace(F.col("title"), JOIN_TITLE_SUFFIX_REGEX, ""))),
     )
 
     return keyed.join(F.broadcast(names), "name_key").select("page_id", "title", "athlete_id")
@@ -131,7 +126,7 @@ def run_audit(athletes_path: str, pages_path: str, relevant_path: str) -> int:
             full_pages
             .join(F.broadcast(dropped_ids), "page_id", "left_semi")
             .select("page_id", "title", "wikitext")
-            .filter(F.col("wikitext").rlike(OLYMPIC_MENTION_REGEX))
+            .filter(F.col("wikitext").rlike(WIKI_OLYMPIC_MENTION_REGEX))
             .cache()
         )
 
@@ -146,7 +141,7 @@ def run_audit(athletes_path: str, pages_path: str, relevant_path: str) -> int:
                 .select(
                     "page_id",
                     "title",
-                    F.regexp_replace(F.regexp_extract(F.col("wikitext"), SNIPPET_REGEX, 1), r"\s+", " ").alias("snippet"),
+                    F.regexp_replace(F.regexp_extract(F.col("wikitext"), WIKI_SNIPPET_REGEX, 1), WIKI_WHITESPACE_REGEX, " ").alias("snippet"),
                 )
                 .orderBy("page_id")
                 .show(SAMPLE_SIZE, truncate=110)

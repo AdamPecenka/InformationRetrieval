@@ -1,24 +1,21 @@
 import html as html_lib
-import re
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
-import constants
-
-# <a ... href="..." ...>text</a>. The lookbehind stops "data-href" from matching.
-_ANCHOR_PATTERN: re.Pattern[str] = re.compile(
-    r"<a\s[^>]*?(?<![\w-])href\s*=\s*(?:\"([^\"]*)\"|'([^']*)')[^>]*>(.*?)</a>",
-    re.IGNORECASE | re.DOTALL,
+from regexes.crawler import (
+    ATHLETE_URL_PATTERN,
+    BIO_HEADING_PATTERN,
+    LINK_PATTERN,
+    MEDAL_SPAN_PATTERN,
+    TAG_PATTERN,
+    URL_WHITELIST,
 )
-_TAG_PATTERN: re.Pattern[str] = re.compile(r"<[^>]+>")
 
 
 def body_of(page_html: str) -> str:
     """Everything before </body>.
 
-    On Olympedia the footer sits after </body> and holds a random "Did you
-    know?" fact that links to unrelated athletes, so it is cut off. The nav bar
-    stays in; the only nav links that pass the whitelist are /editions and
-    /countries, which is what a crawl started at the base URL needs.
+    Olympedia's footer (after </body>) has a random "Did you know?" linking unrelated athletes.
+    The nav bar is kept: its whitelisted links (/editions, /countries) seed the crawl.
     """
     index = page_html.find("</body>")
 
@@ -30,7 +27,7 @@ def body_of(page_html: str) -> str:
 
 def clean_anchor_text(raw: str) -> str:
     """Strip tags, decode entities, collapse whitespace."""
-    without_tags = _TAG_PATTERN.sub("", raw)
+    without_tags = TAG_PATTERN.sub("", raw)
     unescaped = html_lib.unescape(without_tags)
     return " ".join(unescaped.split())
 
@@ -55,14 +52,14 @@ def normalize_url(href: str, base_url: str) -> str | None:
 
 
 def is_whitelisted(url: str) -> bool:
-    return constants.URL_WHITELIST.match(url) is not None
+    return URL_WHITELIST.match(url) is not None
 
 
 def extract_links(page_html: str, base_url: str) -> list[tuple[str, str]]:
     own_url = normalize_url(base_url, base_url)
     found: dict[str, str] = {}
 
-    for match in _ANCHOR_PATTERN.finditer(body_of(page_html)):
+    for match in LINK_PATTERN.finditer(body_of(page_html)):
         href = match.group(1)
 
         if href is None:
@@ -91,7 +88,7 @@ def extract_links(page_html: str, base_url: str) -> list[tuple[str, str]]:
 
 
 def athlete_id(url: str) -> str | None:
-    match = constants.ATHLETE_URL_PATTERN.match(url)
+    match = ATHLETE_URL_PATTERN.match(url)
     if match is None:
         return None
     return match.group(1)
@@ -103,6 +100,6 @@ def is_athlete_url(url: str) -> bool:
 
 def athlete_flags(page_html: str) -> tuple[bool, bool]:
     body = body_of(page_html)
-    has_bio = constants.BIO_HEADING_PATTERN.search(body) is not None
-    has_medal = constants.MEDAL_SPAN_PATTERN.search(body) is not None
+    has_bio = BIO_HEADING_PATTERN.search(body) is not None
+    has_medal = MEDAL_SPAN_PATTERN.search(body) is not None
     return has_bio, has_medal

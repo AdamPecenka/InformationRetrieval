@@ -1,17 +1,7 @@
-"""Stage 2: keep the Wikipedia articles the Olympedia join and the later extraction can use.
+"""Stage 2: keep articles where ANY flag fires; flags are kept as bool columns for auditing.
 
-An article is kept when ANY of six independent signals fires. The signals are stored as boolean
-columns in the output, so later stages can see why a page was kept and the rules can be audited.
-
-    person_category   a births / deaths / "Living people" category
-    person_infobox    a birth date field or birth date template (fallback for pages without such a category)
-    olympic_title     the title mentions the Olympics ("Germany at the 1976 Summer Olympics")
-    olympic_category  an Olympic category ("Olympic medalists in swimming")
-    olympic_medal     a medal template that mentions the Olympics
-    olympedia_link    a link to Olympedia (URL, reference or {{Olympedia}} template)
-
-The output also gets olympedia_id_count (distinct athlete ids cited on the page) and olympedia_id (the id, only
-for a person page that cites exactly one), for an exact join.
+Flags: person_category, person_infobox, olympic_title, olympic_category, olympic_medal, olympedia_link
+(regexes in regexes/wiki.py). Also adds olympedia_id_count / olympedia_id for the exact join.
 """
 
 import os
@@ -19,20 +9,28 @@ import os
 from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 
-import constants
 from common.log import log_add, log_alert, log_error, log_info
+from regexes.wiki import (
+    WIKI_OLYMPEDIA_LINK_REGEX,
+    WIKI_OLYMPEDIA_TEMPLATE_ID_REGEX,
+    WIKI_OLYMPEDIA_URL_ID_REGEX,
+    WIKI_OLYMPIC_CATEGORY_REGEX,
+    WIKI_OLYMPIC_MEDAL_REGEX,
+    WIKI_OLYMPIC_TITLE_REGEX,
+    WIKI_PERSON_CATEGORY_REGEX,
+    WIKI_PERSON_INFOBOX_REGEX,
+)
 from wiki.dump import build_spark
 from wiki.inputs import require_dir
 
-# (flag column, column the regex is applied to, regex). Cheapest first: the title check touches a few bytes,
-# the others scan the whole text.
+# (flag, source column, regex), cheapest first.
 FLAG_RULES: list[tuple[str, str, str]] = [
-    ("olympic_title", "title", constants.WIKI_OLYMPIC_TITLE_REGEX),
-    ("person_category", "wikitext", constants.WIKI_PERSON_CATEGORY_REGEX),
-    ("olympic_category", "wikitext", constants.WIKI_OLYMPIC_CATEGORY_REGEX),
-    ("person_infobox", "wikitext", constants.WIKI_PERSON_INFOBOX_REGEX),
-    ("olympic_medal", "wikitext", constants.WIKI_OLYMPIC_MEDAL_REGEX),
-    ("olympedia_link", "wikitext", constants.WIKI_OLYMPEDIA_LINK_REGEX),
+    ("olympic_title", "title", WIKI_OLYMPIC_TITLE_REGEX),
+    ("person_category", "wikitext", WIKI_PERSON_CATEGORY_REGEX),
+    ("olympic_category", "wikitext", WIKI_OLYMPIC_CATEGORY_REGEX),
+    ("person_infobox", "wikitext", WIKI_PERSON_INFOBOX_REGEX),
+    ("olympic_medal", "wikitext", WIKI_OLYMPIC_MEDAL_REGEX),
+    ("olympedia_link", "wikitext", WIKI_OLYMPEDIA_LINK_REGEX),
 ]
 
 FLAG_COLUMNS: list[str] = [name for name, _, _ in FLAG_RULES]
@@ -54,20 +52,17 @@ def add_relevance_flags(articles: DataFrame) -> DataFrame:
 
 
 def _extract_all(pattern: str) -> Column:
-    # F.regexp_extract_all only exists from PySpark 3.5, the SQL function from Spark 3.1.
-    # r'...' is a raw SQL string literal, so the backslashes reach the Java regex untouched.
+    # F.regexp_extract_all needs PySpark 3.5, the SQL function only 3.1. r'...' keeps backslashes intact.
     return F.expr(f"regexp_extract_all(wikitext, r'{pattern}', 1)")
 
 
 def _add_olympedia_id(flagged: DataFrame) -> DataFrame:
-    """olympedia_id_count: distinct athlete ids cited on the page (null without an Olympedia link).
-
-    olympedia_id: the id, but only for a person page that cites exactly one. A date page or a list cites many
-    athletes, and giving it the first one would join the page to the wrong person.
+    """olympedia_id_count: distinct ids cited (null without an Olympedia link).
+    olympedia_id: set only for a person page citing exactly one id (lists / date pages cite many).
     """
     all_ids = F.array_distinct(F.concat(
-        _extract_all(constants.WIKI_OLYMPEDIA_URL_ID_REGEX),
-        _extract_all(constants.WIKI_OLYMPEDIA_TEMPLATE_ID_REGEX),
+        _extract_all(WIKI_OLYMPEDIA_URL_ID_REGEX),
+        _extract_all(WIKI_OLYMPEDIA_TEMPLATE_ID_REGEX),
     ))
     is_person = F.col("person_category") | F.col("person_infobox")
 
@@ -92,10 +87,7 @@ def keep_relevant(flagged: DataFrame) -> DataFrame:
 
 
 def summarize(kept: DataFrame) -> dict[str, int]:
-    """One pass over the flag columns of the kept articles.
-
-    For every flag: how many pages it fires on, and how many are kept ONLY because of it.
-    """
+    """Per flag: pages it fires on, and pages kept only because of it. One pass."""
     person = _any_of(PERSON_FLAGS)
     olympic = _any_of(OLYMPIC_FLAGS)
 
@@ -177,7 +169,7 @@ def _log_samples(kept: DataFrame) -> None:
         .show(SAMPLE_SIZE, truncate=False)
     )
 
-    # Shows what each rule catches that no other rule does, to judge whether the rule is worth keeping.
+    # What each rule alone catches -> is it worth keeping.
     for name in FLAG_COLUMNS:
         others = [other for other in FLAG_COLUMNS if other != name]
         only_this = kept.filter(F.col(name) & ~_any_of(others)).select("title").limit(SAMPLE_PER_FLAG)
@@ -191,7 +183,7 @@ def run_filter(input_path: str, output_path: str) -> int:
     if not require_dir(input_path):
         return 1
 
-    # mode("overwrite") deletes the target first, which would delete the input if they were the same folder.
+    # overwrite deletes the target first.
     if os.path.abspath(input_path) == os.path.abspath(output_path):
         log_error("input and output are the same folder")
         return 1
@@ -206,7 +198,7 @@ def run_filter(input_path: str, output_path: str) -> int:
 
         articles = spark.read.parquet(input_path)
 
-        # A parquet row count comes from the file footers, no text is read.
+        # Cheap: parquet count reads only footers.
         total = articles.count()
         log_info(f"input articles: {total}")
 

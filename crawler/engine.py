@@ -2,9 +2,17 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-import constants
 from common.clock import utc_now_iso
 from common.log import log_add, log_alert, log_error, log_info, log_remove
+from constants.common import BASE_URL
+from constants.crawler import (
+    MAX_ATTEMPTS,
+    PROGRESS_EVERY_FETCHES,
+    SEED_URLS,
+    STATUS_GAVE_UP,
+    STATUS_OFFSITE_REDIRECT,
+    STATUS_ROBOTS_DISALLOWED,
+)
 from crawler.fetcher import FetchResult, Fetcher
 from crawler.frontier import Frontier, FrontierEntry
 from crawler.links import athlete_flags, athlete_id, extract_links
@@ -45,8 +53,8 @@ def run_crawler(max_pages: int | None = None) -> int:
     frontier.load(state.done)
 
     if frontier.known_count() == 0:
-        frontier.seed(constants.SEED_URLS)
-        log_add(f"seeded the frontier with {len(constants.SEED_URLS)} URL(s)")
+        frontier.seed(SEED_URLS)
+        log_add(f"seeded the frontier with {len(SEED_URLS)} URL(s)")
 
     log_info(
         f"resuming with {frontier.known_count()} known URLs, "
@@ -82,7 +90,7 @@ def run_crawler(max_pages: int | None = None) -> int:
 
 
 def wait_for_robots(fetcher: Fetcher) -> None:
-    """Do not crawl until robots.txt could be read, however long that takes."""
+    """Blocks until robots.txt loads."""
     failures = 0
 
     while not fetcher.load_robots():
@@ -121,7 +129,7 @@ def handle_entry(context: CrawlContext, entry: FrontierEntry) -> str:
     url = entry.url
 
     if not context.fetcher.is_allowed(url):
-        append_record(context, url, constants.STATUS_ROBOTS_DISALLOWED, 0, 0)
+        append_record(context, url, STATUS_ROBOTS_DISALLOWED, 0, 0)
         log_remove(f"robots.txt disallows {url}")
 
         return CONTINUE
@@ -154,7 +162,7 @@ def handle_ok(context: CrawlContext, entry: FrontierEntry, result: FetchResult, 
     url = entry.url
 
     if is_offsite(result.final_url):
-        append_record(context, url, constants.STATUS_OFFSITE_REDIRECT, attempt, 0)
+        append_record(context, url, STATUS_OFFSITE_REDIRECT, attempt, 0)
         log_remove(f"{url} redirected off-site to {result.final_url}")
         return CONTINUE
 
@@ -223,11 +231,10 @@ def handle_retry(context: CrawlContext, entry: FrontierEntry, result: FetchResul
 
     append_record(context, url, result.status, attempt, len(result.body))
 
-    if attempt >= constants.MAX_ATTEMPTS:
-        # Before abandoning the URL, check that the site itself is reachable.
-        # If it is not, this is an outage and the URL is not at fault.
+    if attempt >= MAX_ATTEMPTS:
+        # Only give up if the site is up; otherwise it's an outage, not this URL.
         if context.fetcher.load_robots():
-            append_record(context, url, constants.STATUS_GAVE_UP, attempt, 0)
+            append_record(context, url, STATUS_GAVE_UP, attempt, 0)
             log_error(f"giving up on {url} after {attempt} attempts ({reason})")
 
             context.attempts.pop(url, None)
@@ -263,12 +270,12 @@ def append_record(context: CrawlContext, url: str, status: int, attempt: int, si
 
 def is_offsite(final_url: str) -> bool:
     final_host = urlsplit(final_url).netloc.lower()
-    base_host = urlsplit(constants.BASE_URL).netloc.lower()
+    base_host = urlsplit(BASE_URL).netloc.lower()
     return final_host != base_host
 
 
 def report_progress(context: CrawlContext) -> None:
-    if context.run_fetches % constants.PROGRESS_EVERY_FETCHES != 0:
+    if context.run_fetches % PROGRESS_EVERY_FETCHES != 0:
         return
 
     elapsed = time.monotonic() - context.started_at

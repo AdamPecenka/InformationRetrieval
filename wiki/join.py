@@ -1,24 +1,23 @@
-"""Stage 4: join the Olympedia athletes (our crawl, athletes.tsv) with the Wikipedia people (wiki-extract output).
+"""Stage 4: join Olympedia athletes (athletes.tsv) with Wikipedia people (wiki-extract output).
 
-Why a join: Olympedia knows the sport results of an athlete, Wikipedia adds life details and free text
-that Olympedia lacks for many athletes (birth place, height, weight, a longer biography). The two sources
-share no key, so a pair of records is matched in tiers, most reliable first:
-
-  tier 0  exact id    the Wikipedia article cites olympedia.org/athletes/<id> and <id> is the athlete_id
-  tier 1  name + date a normalised name (title, infobox name or birth name vs used_name or full_name)
-                      and the same full birth date
-  tier 2  name + year the same, with only the birth year equal (the date is missing on one side)
-
-A name alone is not a tier: "John Davis" matches dozens of unrelated people. It is only counted, to show
-how ambiguous names are. The Olympedia side is small (thousands of rows), so every join against it is a
-broadcast join: the big Wikipedia side is never shuffled.
+Tiers, best first:
+  0  exact id     page cites olympedia.org/athletes/<athlete_id>
+  1  name + date  normalised name match and equal full birth date
+  2  name + year  normalised name match and equal birth year
+Name alone is not a tier (too ambiguous), only reported. Olympedia side is small -> always broadcast.
 """
 from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.types import StringType
 
-import constants
 from common.log import log_add, log_alert, log_error, log_info
+from constants.join import (
+    JOIN_BIRTH_YEAR_TOLERANCE,
+    JOIN_HEIGHT_TOLERANCE_CM,
+    JOIN_ID_YEAR_TOLERANCE,
+    JOIN_WEIGHT_TOLERANCE_KG,
+)
+from regexes.join import JOIN_FULL_DATE_REGEX, JOIN_TITLE_SUFFIX_REGEX, JOIN_YEAR_REGEX
 from wiki.audit import read_athletes
 from wiki.dump import build_spark
 from wiki.inputs import require_dir, require_file
@@ -26,7 +25,7 @@ from wiki.names import normalize_name, was_repaired
 
 _normalize_udf = F.udf(normalize_name, StringType())
 
-# Olympedia columns that are carried into the output, so that both sides can be compared there.
+# Carried into the output to compare both sides.
 ATHLETE_COLUMNS: list[str] = [
     "athlete_id", "used_name", "full_name", "born_date", "born_place", "died_date",
     "nationality_names", "height_cm", "weight_kg", "medals_gold", "medals_silver", "medals_bronze",
@@ -51,8 +50,8 @@ def prepare_athletes(raw: DataFrame) -> DataFrame:
 
     return (
         raw.select(*ATHLETE_COLUMNS)
-        .withColumn("born_year", F.when(born.rlike(constants.JOIN_YEAR_REGEX), F.substring(born, 1, 4).cast("int")))
-        .withColumn("born_full", F.when(born.rlike(constants.JOIN_FULL_DATE_REGEX), born))
+        .withColumn("born_year", F.when(born.rlike(JOIN_YEAR_REGEX), F.substring(born, 1, 4).cast("int")))
+        .withColumn("born_full", F.when(born.rlike(JOIN_FULL_DATE_REGEX), born))
     )
 
 
@@ -65,9 +64,9 @@ def athlete_keys(athletes: DataFrame) -> DataFrame:
 
 
 def wiki_keys(people: DataFrame) -> DataFrame:
-    """One row per (page, normalised name): the title without "(swimmer)", the infobox name and the birth name.
-    The infobox and the "YYYY births" category sometimes disagree, so both years are kept."""
-    title_base = F.regexp_replace(F.col("title"), constants.JOIN_TITLE_SUFFIX_REGEX, "")
+    """One row per (page, name_key) from title, infobox name and birth name.
+    Both infobox and category birth year are kept, they sometimes disagree."""
+    title_base = F.regexp_replace(F.col("title"), JOIN_TITLE_SUFFIX_REGEX, "")
     keys = F.array_distinct(F.array(
         _normalize_udf(title_base),
         _normalize_udf(F.col("name")),
@@ -88,11 +87,9 @@ def wiki_keys(people: DataFrame) -> DataFrame:
 
 
 def id_candidates(people: DataFrame, athletes: DataFrame) -> DataFrame:
-    """Every page that cites an athlete's Olympedia id, with the birth-year gap between the two sources.
+    """Pages citing an athlete's id, with year_gap = min |wiki year - born_year| (null if a side lacks a year).
 
-    year_gap is the smaller distance between the athlete's birth year and the infobox or the category year (null when a
-    side has no year). status: exact (gap 0), off_by_one (gap within JOIN_ID_YEAR_TOLERANCE), conflict (further apart,
-    the page most likely cites a coach's or relative's id), unknown (no year to compare)."""
+    status: exact | off_by_one (<= JOIN_ID_YEAR_TOLERANCE) | conflict (likely a coach's / relative's id) | unknown."""
     cited = (
         people
         .filter(F.col("olympedia_id").isNotNull())
@@ -115,13 +112,13 @@ def id_candidates(people: DataFrame, athletes: DataFrame) -> DataFrame:
         "status",
         F.when(F.col("year_gap").isNull(), "unknown")
         .when(F.col("year_gap") == 0, "exact")
-        .when(F.col("year_gap") <= constants.JOIN_ID_YEAR_TOLERANCE, "off_by_one")
+        .when(F.col("year_gap") <= JOIN_ID_YEAR_TOLERANCE, "off_by_one")
         .otherwise("conflict"),
     )
 
 
 def id_pairs(candidates: DataFrame) -> DataFrame:
-    """Tier 0: the cited id is the athlete's and the birth years do not contradict."""
+    """Tier 0: cited id, birth years not in conflict."""
     return (
         candidates
         .filter(F.col("status") != "conflict")
@@ -139,8 +136,7 @@ def _tier_of_match(wiki_full: Column, infobox_year: Column, category_year: Colum
 
 
 def name_candidates(keys_wiki: DataFrame, keys_athletes: DataFrame, athletes: DataFrame) -> DataFrame:
-    """(athlete_id, page_id, tier) for every page whose name key equals an athlete name key. tier is null
-    for a name-only match (same name, but no equal birth date or year)."""
+    """(athlete_id, page_id, tier) for equal name keys; tier is null for a name-only match."""
     born = athletes.select("athlete_id", "born_full", "born_year")
     joined = keys_wiki.join(F.broadcast(keys_athletes), "name_key").join(F.broadcast(born), "athlete_id")
     tier = _tier_of_match(F.col("wiki_full"), F.col("infobox_year"), F.col("category_year"), F.col("born_full"), F.col("born_year"))
@@ -193,7 +189,7 @@ def report_tiers(pairs: DataFrame) -> None:
 
 
 def report_ambiguity_of_names(by_name: DataFrame, athletes: DataFrame) -> None:
-    """Why a name alone is not enough: pages per athlete when only the name is compared."""
+    """Pages per athlete on name alone (shows why it is not a tier)."""
     total = _count(athletes.select("athlete_id").distinct())
     per_athlete = by_name.groupBy("athlete_id").count()
     with_any = _count(per_athlete)
@@ -204,14 +200,14 @@ def report_ambiguity_of_names(by_name: DataFrame, athletes: DataFrame) -> None:
 
 
 def report_id_consistency(candidates: DataFrame) -> DataFrame:
-    """Exact-id candidates by status. Returns the conflicts, which are kept apart from the join."""
+    """Logs exact-id candidates by status, returns the conflicts (excluded from the join)."""
     candidates.cache()
     counts = {row["status"]: row["count"] for row in candidates.groupBy("status").count().collect()}
     total = sum(counts.values())
 
     log_info(
         f"exact-id candidates: {total}; birth year equal {counts.get('exact', 0)}, "
-        f"off by up to {constants.JOIN_ID_YEAR_TOLERANCE} {counts.get('off_by_one', 0)}, "
+        f"off by up to {JOIN_ID_YEAR_TOLERANCE} {counts.get('off_by_one', 0)}, "
         f"no year to compare {counts.get('unknown', 0)}, conflict {counts.get('conflict', 0)}"
     )
 
@@ -225,8 +221,7 @@ def report_id_consistency(candidates: DataFrame) -> DataFrame:
 
 
 def report_against_gold(by_id: DataFrame, by_name: DataFrame) -> None:
-    """The exact-id pairs are a gold standard for the name tiers (biased toward athletes whose page cites Olympedia).
-    Precision: of the name + year pairs for those athletes, how many are the gold page. Recall: how many gold pairs the name tiers find."""
+    """Precision / recall of the name tiers against tier 0 as gold (biased to pages citing Olympedia)."""
     gold_athletes = by_id.select("athlete_id").distinct()
     gold = by_id.select("athlete_id", "page_id").withColumn("gold", F.lit(1))
     name_pairs = (
@@ -267,7 +262,7 @@ def build_joined(pairs: DataFrame, athletes: DataFrame, people: DataFrame) -> Da
     )
     joined = pairs.join(F.broadcast(left), "athlete_id").join(right, "page_id")
 
-    # How far the two sources are apart. Null when one side has no value.
+    # Diffs are null when a side has no value.
     return (
         joined
         .withColumn("birth_year_diff", F.least(
@@ -276,15 +271,14 @@ def build_joined(pairs: DataFrame, athletes: DataFrame, people: DataFrame) -> Da
         ))
         .withColumn("height_diff_cm", F.round(F.abs(F.col("olympedia_height_cm") - F.col("wiki_height_cm")), 1))
         .withColumn("weight_diff_kg", F.round(F.abs(F.col("olympedia_weight_kg") - F.col("wiki_weight_kg")), 1))
-        .withColumn("birth_year_conflict", F.col("birth_year_diff") > constants.JOIN_BIRTH_YEAR_TOLERANCE)
-        .withColumn("height_conflict", F.col("height_diff_cm") > constants.JOIN_HEIGHT_TOLERANCE_CM)
-        .withColumn("weight_conflict", F.col("weight_diff_kg") > constants.JOIN_WEIGHT_TOLERANCE_KG)
+        .withColumn("birth_year_conflict", F.col("birth_year_diff") > JOIN_BIRTH_YEAR_TOLERANCE)
+        .withColumn("height_conflict", F.col("height_diff_cm") > JOIN_HEIGHT_TOLERANCE_CM)
+        .withColumn("weight_conflict", F.col("weight_diff_kg") > JOIN_WEIGHT_TOLERANCE_KG)
     )
 
 
 def report_gaps_filled(joined: DataFrame) -> None:
-    """What Wikipedia adds: Olympedia fields that are empty for a joined athlete but known on the wiki side.
-    Counted per distinct athlete over the pairs of tiers 0..2."""
+    """Per distinct joined athlete: Olympedia fields that are empty but known on the wiki side."""
     athletes = _count(joined.select("athlete_id").distinct())
     checks: dict[str, Column] = {
         "height (olympedia empty, wikipedia known)": F.col("olympedia_height_cm").isNull() & F.col("wiki_height_cm").isNotNull(),
@@ -304,12 +298,12 @@ def report_gaps_filled(joined: DataFrame) -> None:
 
 
 def report_source_conflicts(joined: DataFrame) -> None:
-    """Where Olympedia and Wikipedia state different values for the same person (pairs of tiers 0..2)."""
+    """Pairs where the two sources disagree beyond the JOIN_*_TOLERANCE limits."""
     log_info("the two sources compared, per (athlete, page) pair with a value on both sides:")
     checks: list[tuple[str, str, str, str]] = [
-        ("birth year", "birth_year_diff", "birth_year_conflict", f"more than {constants.JOIN_BIRTH_YEAR_TOLERANCE} year apart"),
-        ("height", "height_diff_cm", "height_conflict", f"more than {constants.JOIN_HEIGHT_TOLERANCE_CM:g} cm apart"),
-        ("weight", "weight_diff_kg", "weight_conflict", f"more than {constants.JOIN_WEIGHT_TOLERANCE_KG:g} kg apart"),
+        ("birth year", "birth_year_diff", "birth_year_conflict", f"more than {JOIN_BIRTH_YEAR_TOLERANCE} year apart"),
+        ("height", "height_diff_cm", "height_conflict", f"more than {JOIN_HEIGHT_TOLERANCE_CM:g} cm apart"),
+        ("weight", "weight_diff_kg", "weight_conflict", f"more than {JOIN_WEIGHT_TOLERANCE_KG:g} kg apart"),
     ]
 
     for label, diff_column, conflict_column, rule in checks:
@@ -388,7 +382,7 @@ def run_join(people_path: str, athletes_path: str, output_path: str) -> int:
 
 
 def _log_encoding(athletes: DataFrame) -> None:
-    """Names that had to be repaired mean athletes.tsv holds mojibake; the join repairs them, the source should be fixed."""
+    """Warns about mojibake in athletes.tsv (repaired for matching here, should be fixed at the source)."""
     repaired_udf = F.udf(was_repaired, "boolean")
     names = athletes.select(F.col("used_name"), F.col("full_name"))
     repaired = names.filter(repaired_udf(F.col("used_name")) | repaired_udf(F.col("full_name"))).count()

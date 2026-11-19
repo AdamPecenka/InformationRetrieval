@@ -22,6 +22,6 @@ def require_file(path: str) -> bool:
     log_error(f"input file not found: {path}")
 
     if PLACEHOLDER_MARK in path:
-        log_alert("the dump path is still the placeholder: set VINF_WIKI_DUMP or edit WIKI_DUMP_PATH in constants.py")
+        log_alert("the dump path is still the placeholder: set VINF_WIKI_DUMP or edit WIKI_DUMP_PATH in constants/wiki.py")
 
     return False

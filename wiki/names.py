@@ -2,12 +2,13 @@
 import unicodedata
 from typing import Optional
 
-import constants
+from constants.join import JOIN_NAME_LETTER_MAP
+from regexes.join import JOIN_MOJIBAKE_PATTERN, JOIN_NAME_NON_ALNUM_PATTERN
 
 
 def repair_mojibake(text: str) -> str:
-    """UTF-8 bytes that were read as Windows-1252 ("PyrÃ©nÃ©es") back to the real text. Anything else is returned unchanged."""
-    if constants.JOIN_MOJIBAKE_PATTERN.search(text) is None:
+    """Undo UTF-8 read as Windows-1252 ("PyrÃ©nÃ©es"); other text unchanged."""
+    if JOIN_MOJIBAKE_PATTERN.search(text) is None:
         return text
 
     try:
@@ -17,18 +18,18 @@ def repair_mojibake(text: str) -> str:
 
 
 def normalize_name(text: Optional[str]) -> Optional[str]:
-    """lower case, no accents, only a-z0-9 separated by single spaces: "Hervé Gardye-de la Chapelle" -> "herve gardye de la chapelle"."""
+    """Match key: "Hervé Gardye-de la Chapelle" -> "herve gardye de la chapelle"."""
     if text is None:
         return None
 
     repaired = repair_mojibake(text).lower()
 
-    for letter, replacement in constants.JOIN_NAME_LETTER_MAP.items():
+    for letter, replacement in JOIN_NAME_LETTER_MAP.items():
         repaired = repaired.replace(letter, replacement)
 
     decomposed = unicodedata.normalize("NFKD", repaired)
     without_accents = "".join(character for character in decomposed if not unicodedata.combining(character))
-    normalized = constants.JOIN_NAME_NON_ALNUM_PATTERN.sub(" ", without_accents).strip()
+    normalized = JOIN_NAME_NON_ALNUM_PATTERN.sub(" ", without_accents).strip()
 
     if normalized == "":
         return None

@@ -6,42 +6,50 @@ from array import array
 from collections import Counter
 from collections.abc import Iterator
 
-import constants
 from common.log import log_add, log_alert, log_error, log_info, log_remove
 from common.tsv import format_row, read_rows
+from constants.extractor import ATHLETES_TSV_PATH, ATHLETE_COLUMNS, RESULTS_TSV_PATH, RESULT_COLUMNS
+from constants.indexer import (
+    DICTIONARY_COLUMNS,
+    DOC_COLUMNS,
+    INDEX_BLOCKS_DIR,
+    INDEX_BLOCK_MAX_POSTINGS,
+    INDEX_DICTIONARY_PATH,
+    INDEX_DIR,
+    INDEX_DOCS_PATH,
+    INDEX_POSTINGS_PATH,
+    INDEX_PROGRESS_EVERY_DOCS,
+    INDEX_RESULT_COLUMNS,
+    INDEX_TEXT_COLUMNS,
+)
 from indexer.ranking import tf_weight
 from indexer.text import tokenize
 
-# Single-pass in-memory indexing (SPIMI), see the lecture "Single-pass in-memory indexing":
-#   1. documents are read one by one and their terms are added straight into an in-memory dictionary
-#      term -> postings list (no termID mapping)
-#   2. when the block is "full" its terms are sorted and it is written to disk
-#   3. all blocks are merged into the final dictionary + postings file
-# Doc ids grow while reading and a document is never split between two blocks, so the postings of
-# one term from consecutive blocks can simply be concatenated and stay sorted by doc id.
+# SPIMI: term -> postings in memory, sorted block flushed to disk when full, blocks merged at the end.
+# Doc ids only grow and a doc never spans blocks, so concatenating a term's postings keeps them sorted.
 
 
 def _prepare_blocks_dir() -> None:
-    if os.path.isdir(constants.INDEX_BLOCKS_DIR):
-        stale = os.listdir(constants.INDEX_BLOCKS_DIR)
+    if os.path.isdir(INDEX_BLOCKS_DIR):
+        stale = os.listdir(INDEX_BLOCKS_DIR)
 
         for name in stale:
-            os.remove(os.path.join(constants.INDEX_BLOCKS_DIR, name))
+            os.remove(os.path.join(INDEX_BLOCKS_DIR, name))
 
         if stale:
             log_remove(f"dropped {len(stale)} stale block files from an interrupted run")
 
-    os.makedirs(constants.INDEX_BLOCKS_DIR, exist_ok=True)
+    os.makedirs(INDEX_BLOCKS_DIR, exist_ok=True)
 
 
 def _load_result_texts() -> dict[str, list[str]]:
-    """athlete_id -> one text per result row of the athlete (the columns of INDEX_RESULT_COLUMNS joined)."""
-    if not os.path.exists(constants.RESULTS_TSV_PATH):
-        log_alert(f"{constants.RESULTS_TSV_PATH} not found, indexing the athletes without their results")
+    """athlete_id -> INDEX_RESULT_COLUMNS text of each result row."""
+    if not os.path.exists(RESULTS_TSV_PATH):
+        log_alert(f"{RESULTS_TSV_PATH} not found, indexing the athletes without their results")
         return {}
 
-    rows, skipped = read_rows(constants.RESULTS_TSV_PATH, constants.RESULT_COLUMNS)
-    indexes = [constants.RESULT_COLUMNS.index(column) for column in constants.INDEX_RESULT_COLUMNS]
+    rows, skipped = read_rows(RESULTS_TSV_PATH, RESULT_COLUMNS)
+    indexes = [RESULT_COLUMNS.index(column) for column in INDEX_RESULT_COLUMNS]
     texts: dict[str, list[str]] = {}
 
     if skipped > 0:
@@ -55,8 +63,8 @@ def _load_result_texts() -> dict[str, list[str]]:
 
 
 def _write_block(block: dict[str, list[int]], number: int) -> str:
-    """Writes one block: lines `term<TAB>doc:tf,doc:tf,...`, terms sorted. A postings list is stored flat as doc, tf, doc, tf."""
-    path = os.path.join(constants.INDEX_BLOCKS_DIR, f"block_{number:05d}.tsv")
+    """Sorted lines `term<TAB>doc:tf,doc:tf,...`. In memory a postings list is flat [doc, tf, doc, tf, ...]."""
+    path = os.path.join(INDEX_BLOCKS_DIR, f"block_{number:05d}.tsv")
 
     with open(path, "w", encoding="utf-8", newline="") as handle:
         for term in sorted(block):
@@ -76,25 +84,20 @@ def _read_block(path: str, number: int) -> Iterator[tuple[str, int, str]]:
 
 
 def _merge_blocks(block_paths: list[str], norms_squared: array) -> tuple[int, int]:
-    """
-    Merges the blocks into dictionary.tsv.tmp and postings.tsv.tmp. Returns (terms, postings).
+    """Merge blocks into dictionary.tsv.tmp + postings.tsv.tmp, returns (terms, postings).
 
-    postings.tsv has one line per term: term<TAB>doc:tf,doc:tf,... The dictionary stores the byte
-    offset of that line. The file is written in binary mode so the offsets are exact (no newline
-    translation on Windows) and the lines are UTF-8.
-
-    While the postings of a term pass through, the squared length of every document vector
-    (log scaled tf) is accumulated, it is needed for the Euclidean normalization.
+    Dictionary offset = byte offset of the term's line in postings.tsv (binary mode: no CRLF translation).
+    Also accumulates squared log-tf doc vector lengths into norms_squared.
     """
     merged = heapq.merge(*(_read_block(path, number) for number, path in enumerate(block_paths)))
     terms = 0
     postings_total = 0
     offset = 0
 
-    with open(constants.INDEX_POSTINGS_PATH + ".tmp", "wb") as postings_file, open(
-        constants.INDEX_DICTIONARY_PATH + ".tmp", "w", encoding="utf-8", newline=""
+    with open(INDEX_POSTINGS_PATH + ".tmp", "wb") as postings_file, open(
+        INDEX_DICTIONARY_PATH + ".tmp", "w", encoding="utf-8", newline=""
     ) as dictionary_file:
-        dictionary_file.write(format_row(constants.DICTIONARY_COLUMNS))
+        dictionary_file.write(format_row(DICTIONARY_COLUMNS))
 
         for term, group in itertools.groupby(merged, key=lambda entry: entry[0]):
             pairs: list[str] = []
@@ -117,8 +120,8 @@ def _merge_blocks(block_paths: list[str], norms_squared: array) -> tuple[int, in
 
 
 def _write_docs(athlete_ids: list[str], names: list[str], lengths: array, norms_squared: array) -> None:
-    with open(constants.INDEX_DOCS_PATH + ".tmp", "w", encoding="utf-8", newline="") as handle:
-        handle.write(format_row(constants.DOC_COLUMNS))
+    with open(INDEX_DOCS_PATH + ".tmp", "w", encoding="utf-8", newline="") as handle:
+        handle.write(format_row(DOC_COLUMNS))
 
         for doc_id in range(len(athlete_ids)):
             norm = math.sqrt(norms_squared[doc_id])
@@ -126,30 +129,30 @@ def _write_docs(athlete_ids: list[str], names: list[str], lengths: array, norms_
             handle.write(format_row(row))
 
 def build_index() -> int:
-    """Rebuilds the whole index from data/extracted/athletes.tsv. One athlete row = one document."""
-    if not os.path.exists(constants.ATHLETES_TSV_PATH):
-        log_error(f"{constants.ATHLETES_TSV_PATH} not found, run the extractor first")
+    """Full rebuild from athletes.tsv (+ results.tsv). One athlete = one document."""
+    if not os.path.exists(ATHLETES_TSV_PATH):
+        log_error(f"{ATHLETES_TSV_PATH} not found, run the extractor first")
         return 1
 
-    column_count = len(constants.ATHLETE_COLUMNS)
-    id_index = constants.ATHLETE_COLUMNS.index("athlete_id")
-    name_index = constants.ATHLETE_COLUMNS.index("full_name")
-    text_indexes = [constants.ATHLETE_COLUMNS.index(column) for column in constants.INDEX_TEXT_COLUMNS]
+    column_count = len(ATHLETE_COLUMNS)
+    id_index = ATHLETE_COLUMNS.index("athlete_id")
+    name_index = ATHLETE_COLUMNS.index("full_name")
+    text_indexes = [ATHLETE_COLUMNS.index(column) for column in INDEX_TEXT_COLUMNS]
 
-    os.makedirs(constants.INDEX_DIR, exist_ok=True)
+    os.makedirs(INDEX_DIR, exist_ok=True)
     _prepare_blocks_dir()
     result_texts = _load_result_texts()
 
     athlete_ids: list[str] = []
     names: list[str] = []
-    lengths = array("I")  # number of tokens of every document, used by BM25
+    lengths = array("I")  # tokens per doc, for BM25
     block: dict[str, list[int]] = {}
     block_postings = 0
     block_paths: list[str] = []
     skipped = 0
 
-    with open(constants.ATHLETES_TSV_PATH, "r", encoding="utf-8", newline="") as handle:
-        if handle.readline() != format_row(constants.ATHLETE_COLUMNS):
+    with open(ATHLETES_TSV_PATH, "r", encoding="utf-8", newline="") as handle:
+        if handle.readline() != format_row(ATHLETE_COLUMNS):
             log_error("athletes.tsv has an unexpected header, run: python main.py extract --rebuild")
             return 1
 
@@ -185,12 +188,12 @@ def build_index() -> int:
                 postings.append(tf)
                 block_postings += 1
 
-            if block_postings >= constants.INDEX_BLOCK_MAX_POSTINGS:
+            if block_postings >= INDEX_BLOCK_MAX_POSTINGS:
                 block_paths.append(_write_block(block, len(block_paths)))
                 block = {}
                 block_postings = 0
 
-            if len(athlete_ids) % constants.INDEX_PROGRESS_EVERY_DOCS == 0:
+            if len(athlete_ids) % INDEX_PROGRESS_EVERY_DOCS == 0:
                 log_info(f"{len(athlete_ids)} documents read")
 
     if block:
@@ -209,14 +212,14 @@ def build_index() -> int:
     terms, postings_total = _merge_blocks(block_paths, norms_squared)
     _write_docs(athlete_ids, names, lengths, norms_squared)
 
-    # All three files are complete at this point, swap them in together.
-    for path in (constants.INDEX_POSTINGS_PATH, constants.INDEX_DICTIONARY_PATH, constants.INDEX_DOCS_PATH):
+    # Swap all three in together.
+    for path in (INDEX_POSTINGS_PATH, INDEX_DICTIONARY_PATH, INDEX_DOCS_PATH):
         os.replace(path + ".tmp", path)
 
     for path in block_paths:
         os.remove(path)
 
-    os.rmdir(constants.INDEX_BLOCKS_DIR)
+    os.rmdir(INDEX_BLOCKS_DIR)
     log_remove(f"removed {len(block_paths)} block files")
 
     log_info(f"done: {len(athlete_ids)} documents, {terms} terms, {postings_total} postings")

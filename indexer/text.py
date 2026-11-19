@@ -1,6 +1,6 @@
 import unicodedata
 
-import constants
+from regexes.indexer import TOKEN_PATTERN
 
 
 def strip_accents(text: str) -> str:
@@ -9,9 +9,5 @@ def strip_accents(text: str) -> str:
 
 
 def tokenize(text: str) -> list[str]:
-    """Lower-case, strip accents, split into alphanumeric tokens.
-
-    No stop word list and no stemming: the idf weight already pushes frequent
-    words down (lecture: "Frekvencia termov a váženie").
-    """
-    return constants.TOKEN_PATTERN.findall(strip_accents(text).lower())
+    """Lower-case, strip accents, split into alphanumeric tokens. No stop words / stemming, idf handles frequent terms."""
+    return TOKEN_PATTERN.findall(strip_accents(text).lower())

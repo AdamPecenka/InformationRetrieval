@@ -1,12 +1,71 @@
-"""Pure-Python (no Spark) extraction of person attributes from the start of a wikitext article.
-
-Everything here works on plain strings, so it can be unit-tested without a Spark session
-and shipped to Spark workers as a UDF body (see wiki/extract.py).
-"""
+"""Person attributes from the head of a wikitext article. Plain Python, used as the UDF body in wiki/extract.py."""
 import html
 from typing import Optional
 
-import constants
+from constants.wiki import (
+    WIKI_BODY_MAX_CHARS,
+    WIKI_CIRCA_TEMPLATES,
+    WIKI_CONVERT_TEMPLATES,
+    WIKI_FEET_UNITS,
+    WIKI_HEIGHT_RANGE_CM,
+    WIKI_INCH_UNITS,
+    WIKI_LANG_TEMPLATES,
+    WIKI_LEAD_MAX_CHARS,
+    WIKI_LIST_TEMPLATES,
+    WIKI_MAX_TEMPLATE_DEPTH,
+    WIKI_MEASURE_TEMPLATES,
+    WIKI_MEDAL_KINDS,
+    WIKI_MONTHS,
+    WIKI_PASSTHROUGH_TEMPLATES,
+    WIKI_POUND_UNITS,
+    WIKI_SECTION_MAX_CHARS,
+    WIKI_STONE_UNITS,
+    WIKI_WEIGHT_RANGE_KG,
+)
+from regexes.wiki import (
+    WIKI_BREAK_PATTERN,
+    WIKI_BULLET_PATTERN,
+    WIKI_CATEGORY_BIRTH_PATTERN,
+    WIKI_CATEGORY_COUNTRY_PATTERN,
+    WIKI_CATEGORY_DEATH_PATTERN,
+    WIKI_CATEGORY_GAMES_PATTERN,
+    WIKI_CATEGORY_MEDAL_TYPE_PATTERN,
+    WIKI_COMMENT_PATTERN,
+    WIKI_DATE_BC_PATTERN,
+    WIKI_DATE_CIRCA_PATTERN,
+    WIKI_DATE_DMY_PATTERN,
+    WIKI_DATE_MDY_PATTERN,
+    WIKI_DATE_MY_PATTERN,
+    WIKI_DATE_TEMPLATE_PATTERN,
+    WIKI_DATE_Y_PATTERN,
+    WIKI_EMPTY_PARENTHESES_PATTERN,
+    WIKI_EXTERNAL_LINK_PATTERN,
+    WIKI_HEADING_MARKUP_PATTERN,
+    WIKI_HEIGHT_CM_PATTERN,
+    WIKI_HEIGHT_FT_PATTERN,
+    WIKI_HEIGHT_M_PATTERN,
+    WIKI_INFOBOX_PARAM_PATTERN,
+    WIKI_INFOBOX_START_PATTERN,
+    WIKI_INNER_TEMPLATE_PATTERN,
+    WIKI_LEAD_IMAGE_PATTERN,
+    WIKI_LINK_PATTERN,
+    WIKI_MEDAL_TEMPLATE_PATTERN,
+    WIKI_NUMBER_PATTERN,
+    WIKI_OLYMPIC_TEXT_PATTERN,
+    WIKI_PARENTHESIS_PATTERN,
+    WIKI_REF_PATTERN,
+    WIKI_SECTION_PATTERN,
+    WIKI_SPACE_PATTERN,
+    WIKI_STRAY_OPENING_PATTERN,
+    WIKI_STRAY_SEPARATOR_PATTERN,
+    WIKI_TABLE_PATTERN,
+    WIKI_TAG_PATTERN,
+    WIKI_WANTED_SECTION_PATTERN,
+    WIKI_WEIGHT_KG_PATTERN,
+    WIKI_WEIGHT_LB_PATTERN,
+    WIKI_WEIGHT_ST_PATTERN,
+    WIKI_YOUTH_TEXT_PATTERN,
+)
 
 FIELD_NAMES: list[str] = [
     "infobox_type",
@@ -36,7 +95,7 @@ FIELD_NAMES: list[str] = [
     "body",
 ]
 
-# Infobox parameter names that can hold each attribute, in priority order.
+# Infobox parameter names per attribute, first non-empty wins.
 NAME_KEYS: list[str] = ["name"]
 BIRTH_NAME_KEYS: list[str] = ["birth_name", "birthname", "full_name", "fullname"]
 BIRTH_DATE_KEYS: list[str] = ["birth_date", "birthdate", "born", "birth_year"]
@@ -54,8 +113,7 @@ SPORT_KEYS: list[str] = ["sport", "sports"]
 # ---------------------------------------------------------------------------------------------
 
 def find_template_end(text: str, start: int) -> int:
-    """Index just after the "}}" that closes the "{{" at text[start]. len(text) if it is never closed
-    (the region we get is cut at a fixed length, so the closing braces may be missing)."""
+    """Index after the "}}" closing the "{{" at text[start]; len(text) if unclosed (head is truncated)."""
     depth = 0
     index = start
     length = len(text)
@@ -119,8 +177,8 @@ def split_top_level(body: str) -> list[str]:
 
 
 def first_infobox(region: str) -> Optional[str]:
-    """The text of the first infobox template (from "{{Infobox" to its closing braces)."""
-    found = constants.WIKI_INFOBOX_START_PATTERN.search(region)
+    """First "{{Infobox ...}}" including braces."""
+    found = WIKI_INFOBOX_START_PATTERN.search(region)
 
     if found is None:
         return None
@@ -131,8 +189,7 @@ def first_infobox(region: str) -> Optional[str]:
 
 
 def medal_table_after(region: str, infobox: str) -> str:
-    """Biographies often put the medal table right behind the infobox as a template of its own
-    ({{MedalTableTop ...}} or {{MedalTop}} ... {{MedalBottom}}). That block ends at the first blank line."""
+    """Medal block right after the infobox ({{MedalTableTop}} / {{MedalTop}} ... {{MedalBottom}}), up to a blank line."""
     start = region.find(infobox)
 
     if start < 0:
@@ -147,7 +204,7 @@ def medal_table_after(region: str, infobox: str) -> str:
 
 
 def infobox_type(infobox: str) -> str:
-    found = constants.WIKI_INFOBOX_START_PATTERN.match(constants.WIKI_COMMENT_PATTERN.sub("", infobox))
+    found = WIKI_INFOBOX_START_PATTERN.match(WIKI_COMMENT_PATTERN.sub("", infobox))
 
     if found is None:
         return ""
@@ -156,9 +213,8 @@ def infobox_type(infobox: str) -> str:
 
 
 def parse_infobox(infobox: str) -> dict[str, str]:
-    """Parameters of one infobox as {lowercase name: raw value}. A nested "{{Infobox ...}}" (the `module`
-    parameter of Infobox person / officeholder) is parsed too and fills the parameters the outer one lacks."""
-    without_comments = constants.WIKI_COMMENT_PATTERN.sub("", infobox)
+    """{lowercase name: raw value}. Nested infoboxes (`module` param) fill what the outer one lacks."""
+    without_comments = WIKI_COMMENT_PATTERN.sub("", infobox)
     inner = without_comments[2:]
 
     if inner.endswith("}}"):
@@ -168,7 +224,7 @@ def parse_infobox(infobox: str) -> dict[str, str]:
     nested: list[dict[str, str]] = []
 
     for piece in split_top_level(inner):
-        found = constants.WIKI_INFOBOX_PARAM_PATTERN.match(piece)
+        found = WIKI_INFOBOX_PARAM_PATTERN.match(piece)
 
         if found is None:
             continue
@@ -179,7 +235,7 @@ def parse_infobox(infobox: str) -> dict[str, str]:
         if key not in params or params[key] == "":
             params[key] = value
 
-        if constants.WIKI_INFOBOX_START_PATTERN.match(value) is not None:
+        if WIKI_INFOBOX_START_PATTERN.match(value) is not None:
             nested.append(parse_infobox(value))
 
     for module in nested:
@@ -205,7 +261,7 @@ def pick(params: dict[str, str], keys: list[str]) -> str:
 # ---------------------------------------------------------------------------------------------
 
 def _is_number(text: str) -> bool:
-    return constants.WIKI_NUMBER_PATTERN.match(text) is not None
+    return WIKI_NUMBER_PATTERN.match(text) is not None
 
 
 def _convert_text(arguments: list[str]) -> str:
@@ -214,10 +270,10 @@ def _convert_text(arguments: list[str]) -> str:
         first_unit = arguments[1].lower()
         second_unit = arguments[3].lower()
 
-        if first_unit in constants.WIKI_FEET_UNITS and second_unit in constants.WIKI_INCH_UNITS:
+        if first_unit in WIKI_FEET_UNITS and second_unit in WIKI_INCH_UNITS:
             return f"{arguments[0]} ft {arguments[2]} in"
 
-        if first_unit in constants.WIKI_STONE_UNITS and second_unit in constants.WIKI_POUND_UNITS:
+        if first_unit in WIKI_STONE_UNITS and second_unit in WIKI_POUND_UNITS:
             return f"{arguments[0]} st {arguments[2]} lb"
 
     return " ".join(arguments[:2])
@@ -260,22 +316,22 @@ def _template_replacement(content: str) -> str:
             key, value = part.split("=", 1)
             named[key.strip().lower()] = value.strip()
 
-    if name in constants.WIKI_LIST_TEMPLATES:
+    if name in WIKI_LIST_TEMPLATES:
         return "; ".join(argument for argument in arguments if argument != "")
 
-    if name in constants.WIKI_PASSTHROUGH_TEMPLATES:
+    if name in WIKI_PASSTHROUGH_TEMPLATES:
         return arguments[0] if len(arguments) > 0 else ""
 
-    if name in constants.WIKI_CIRCA_TEMPLATES:
+    if name in WIKI_CIRCA_TEMPLATES:
         return "c. " + arguments[0] if len(arguments) > 0 else "c."
 
-    if name in constants.WIKI_LANG_TEMPLATES:
+    if name in WIKI_LANG_TEMPLATES:
         return arguments[-1] if len(arguments) > 1 else ""
 
-    if name in constants.WIKI_CONVERT_TEMPLATES:
+    if name in WIKI_CONVERT_TEMPLATES:
         return _convert_text(arguments)
 
-    if name in constants.WIKI_MEASURE_TEMPLATES:
+    if name in WIKI_MEASURE_TEMPLATES:
         return _measure_text(name, named)
 
     return ""
@@ -283,27 +339,27 @@ def _template_replacement(content: str) -> str:
 
 def clean_value(raw: str) -> str:
     """Wikitext value -> plain text: no comments, refs, templates, links or tags."""
-    text = constants.WIKI_COMMENT_PATTERN.sub("", raw)
-    text = constants.WIKI_REF_PATTERN.sub("", text)
+    text = WIKI_COMMENT_PATTERN.sub("", raw)
+    text = WIKI_REF_PATTERN.sub("", text)
 
-    # Links first: their "|" would otherwise be taken for a template argument separator.
-    text = constants.WIKI_EXTERNAL_LINK_PATTERN.sub(r"\1", text)
-    text = constants.WIKI_LINK_PATTERN.sub(r"\1", text)
+    # Links first, their "|" would split template arguments.
+    text = WIKI_EXTERNAL_LINK_PATTERN.sub(r"\1", text)
+    text = WIKI_LINK_PATTERN.sub(r"\1", text)
 
-    for _ in range(constants.WIKI_MAX_TEMPLATE_DEPTH):
-        replaced = constants.WIKI_INNER_TEMPLATE_PATTERN.sub(lambda match: _template_replacement(match.group(1)), text)
+    for _ in range(WIKI_MAX_TEMPLATE_DEPTH):
+        replaced = WIKI_INNER_TEMPLATE_PATTERN.sub(lambda match: _template_replacement(match.group(1)), text)
 
         if replaced == text:
             break
 
         text = replaced
 
-    text = constants.WIKI_BULLET_PATTERN.sub("; ", text)
-    text = constants.WIKI_BREAK_PATTERN.sub("; ", text)
-    text = constants.WIKI_TAG_PATTERN.sub("", text)
+    text = WIKI_BULLET_PATTERN.sub("; ", text)
+    text = WIKI_BREAK_PATTERN.sub("; ", text)
+    text = WIKI_TAG_PATTERN.sub("", text)
     text = text.replace("'''", "").replace("''", "")
     text = html.unescape(text)
-    text = constants.WIKI_SPACE_PATTERN.sub(" ", text)
+    text = WIKI_SPACE_PATTERN.sub(" ", text)
     return text.strip(" ;,")
 
 
@@ -346,20 +402,20 @@ def _valid_day(day: int) -> Optional[int]:
 
 
 def _month_from_name(name: str) -> Optional[int]:
-    return constants.WIKI_MONTHS.get(name[:3].lower())
+    return WIKI_MONTHS.get(name[:3].lower())
 
 
 def parse_date(raw: str) -> Optional[ParsedDate]:
-    """Date from a raw infobox value. Handles {{birth date|1890|8|24|mf=y}}, {{death date and age|1968|1|22|1890|8|24}},
-    {{circa|490}}, "3 December 1949 (aged 47)", "August 24, 1890", "August 1890", "1890", BC."""
+    """{{birth date|1890|8|24}}, {{death date and age|...}}, {{circa|490}}, "3 December 1949 (aged 47)",
+    "August 24, 1890", "August 1890", "1890", BC."""
     if raw.strip() == "":
         return None
 
-    raw_without_comments = constants.WIKI_COMMENT_PATTERN.sub("", raw)
-    raw_without_refs = constants.WIKI_REF_PATTERN.sub("", raw_without_comments)
+    raw_without_comments = WIKI_COMMENT_PATTERN.sub("", raw)
+    raw_without_refs = WIKI_REF_PATTERN.sub("", raw_without_comments)
     circa = False
 
-    template = constants.WIKI_DATE_TEMPLATE_PATTERN.search(raw_without_refs)
+    template = WIKI_DATE_TEMPLATE_PATTERN.search(raw_without_refs)
 
     if template is not None:
         numbers: list[int] = []
@@ -370,7 +426,7 @@ def parse_date(raw: str) -> Optional[ParsedDate]:
             if stripped.isdigit():
                 numbers.append(int(stripped))
 
-        # Editors sometimes write {{birth date|22|11|1897}} (day, month, year); the template wants the year first.
+        # Fix swapped {{birth date|22|11|1897}} (d|m|y).
         if len(numbers) >= 3 and numbers[0] <= 31 and numbers[2] >= 1000:
             numbers = [numbers[2], numbers[1], numbers[0]]
 
@@ -381,21 +437,21 @@ def parse_date(raw: str) -> Optional[ParsedDate]:
 
     lowered = raw_without_refs.lower().replace(" ", "")
 
-    for circa_name in constants.WIKI_CIRCA_TEMPLATES:
+    for circa_name in WIKI_CIRCA_TEMPLATES:
         if f"{{{{{circa_name}|" in lowered:
             circa = True
             break
 
     text = clean_value(raw_without_refs)
-    text = constants.WIKI_PARENTHESIS_PATTERN.sub("", text)
+    text = WIKI_PARENTHESIS_PATTERN.sub("", text)
 
-    if constants.WIKI_DATE_CIRCA_PATTERN.search(text) is not None:
+    if WIKI_DATE_CIRCA_PATTERN.search(text) is not None:
         circa = True
 
-    negative = constants.WIKI_DATE_BC_PATTERN.search(text) is not None
+    negative = WIKI_DATE_BC_PATTERN.search(text) is not None
     sign = -1 if negative else 1
 
-    dmy = constants.WIKI_DATE_DMY_PATTERN.search(text)
+    dmy = WIKI_DATE_DMY_PATTERN.search(text)
 
     if dmy is not None:
         month = _month_from_name(dmy.group(2))
@@ -403,7 +459,7 @@ def parse_date(raw: str) -> Optional[ParsedDate]:
         if month is not None:
             return ParsedDate(sign * int(dmy.group(3)), month, _valid_day(int(dmy.group(1))), circa)
 
-    mdy = constants.WIKI_DATE_MDY_PATTERN.search(text)
+    mdy = WIKI_DATE_MDY_PATTERN.search(text)
 
     if mdy is not None:
         month = _month_from_name(mdy.group(1))
@@ -411,7 +467,7 @@ def parse_date(raw: str) -> Optional[ParsedDate]:
         if month is not None:
             return ParsedDate(sign * int(mdy.group(3)), month, _valid_day(int(mdy.group(2))), circa)
 
-    my = constants.WIKI_DATE_MY_PATTERN.search(text)
+    my = WIKI_DATE_MY_PATTERN.search(text)
 
     if my is not None:
         month = _month_from_name(my.group(1))
@@ -419,7 +475,7 @@ def parse_date(raw: str) -> Optional[ParsedDate]:
         if month is not None:
             return ParsedDate(sign * int(my.group(2)), month, None, circa)
 
-    year = constants.WIKI_DATE_Y_PATTERN.search(text)
+    year = WIKI_DATE_Y_PATTERN.search(text)
 
     if year is not None:
         return ParsedDate(sign * int(year.group(1)), None, None, circa)
@@ -435,9 +491,9 @@ def parse_height_cm(raw: str) -> Optional[float]:
     text = clean_value(raw)
     value: Optional[float] = None
 
-    centimetres = constants.WIKI_HEIGHT_CM_PATTERN.search(text)
-    metres = constants.WIKI_HEIGHT_M_PATTERN.search(text)
-    feet = constants.WIKI_HEIGHT_FT_PATTERN.search(text)
+    centimetres = WIKI_HEIGHT_CM_PATTERN.search(text)
+    metres = WIKI_HEIGHT_M_PATTERN.search(text)
+    feet = WIKI_HEIGHT_FT_PATTERN.search(text)
 
     if centimetres is not None:
         value = float(centimetres.group(1))
@@ -450,7 +506,7 @@ def parse_height_cm(raw: str) -> Optional[float]:
     if value is None:
         return None
 
-    low, high = constants.WIKI_HEIGHT_RANGE_CM
+    low, high = WIKI_HEIGHT_RANGE_CM
 
     if value < low or value > high:
         return None
@@ -462,9 +518,9 @@ def parse_weight_kg(raw: str) -> Optional[float]:
     text = clean_value(raw)
     value: Optional[float] = None
 
-    kilograms = constants.WIKI_WEIGHT_KG_PATTERN.search(text)
-    stones = constants.WIKI_WEIGHT_ST_PATTERN.search(text)
-    pounds = constants.WIKI_WEIGHT_LB_PATTERN.search(text)
+    kilograms = WIKI_WEIGHT_KG_PATTERN.search(text)
+    stones = WIKI_WEIGHT_ST_PATTERN.search(text)
+    pounds = WIKI_WEIGHT_LB_PATTERN.search(text)
 
     if kilograms is not None:
         value = float(kilograms.group(1))
@@ -477,7 +533,7 @@ def parse_weight_kg(raw: str) -> Optional[float]:
     if value is None:
         return None
 
-    low, high = constants.WIKI_WEIGHT_RANGE_KG
+    low, high = WIKI_WEIGHT_RANGE_KG
 
     if value < low or value > high:
         return None
@@ -490,20 +546,16 @@ def parse_weight_kg(raw: str) -> Optional[float]:
 # ---------------------------------------------------------------------------------------------
 
 def _is_olympic(text: str) -> bool:
-    return constants.WIKI_OLYMPIC_TEXT_PATTERN.search(text) is not None and constants.WIKI_YOUTH_TEXT_PATTERN.search(text) is None
+    return WIKI_OLYMPIC_TEXT_PATTERN.search(text) is not None and WIKI_YOUTH_TEXT_PATTERN.search(text) is None
 
 
 def parse_medals(infobox: str) -> dict[str, int]:
-    """Olympic medal counts from the medal templates of an infobox.
-
-    {{MedalCompetition | Olympic Games}} (or {{Medal|Competition|...}}) opens a section; the medals that follow
-    belong to it until the next Competition. Only Olympic sections count, so a block that lists Olympic gold
-    and All-Africa Games medals counts the Olympic ones only. When a medal list has no Competition header
-    the medal's own text decides ("1924 Summer Olympics")."""
+    """Olympic medal counts. A {{MedalCompetition}} header scopes the medals below it;
+    without a header the medal's own text decides ("1924 Summer Olympics"). Youth games don't count."""
     counts: dict[str, int] = {"gold": 0, "silver": 0, "bronze": 0}
     competition_olympic: Optional[bool] = None
 
-    for match in constants.WIKI_MEDAL_TEMPLATE_PATTERN.finditer(infobox):
+    for match in WIKI_MEDAL_TEMPLATE_PATTERN.finditer(infobox):
         suffix = match.group(1).lower()
         arguments = [argument.strip() for argument in match.group(2).split("|")]
 
@@ -523,7 +575,7 @@ def parse_medals(infobox: str) -> dict[str, int]:
             competition_olympic = _is_olympic(raw_text)
             continue
 
-        if kind not in constants.WIKI_MEDAL_KINDS:
+        if kind not in WIKI_MEDAL_KINDS:
             continue
 
         if competition_olympic is None:
@@ -542,7 +594,7 @@ def parse_medals(infobox: str) -> dict[str, int]:
 # ---------------------------------------------------------------------------------------------
 
 def _find_link_end(text: str, start: int) -> int:
-    """Index just after the "]]" that closes the "[[" at text[start]; len(text) if never closed."""
+    """Index after the "]]" closing the "[[" at text[start]; len(text) if unclosed."""
     depth = 0
     index = start
     length = len(text)
@@ -566,27 +618,27 @@ def _find_link_end(text: str, start: int) -> int:
 
 
 def _strip_leading_blocks(text: str) -> str:
-    """Drop the templates (short description, hatnotes, medal tables, ...) and images that stand in front of the first paragraph."""
+    """Drop templates (hatnotes, medal tables, ...) and images before the first paragraph."""
     while True:
         text = text.lstrip()
 
         if text.startswith("{{"):
             text = text[find_template_end(text, 0):]
-        elif constants.WIKI_LEAD_IMAGE_PATTERN.match(text) is not None:
+        elif WIKI_LEAD_IMAGE_PATTERN.match(text) is not None:
             text = text[_find_link_end(text, 0):]
         else:
             return text
 
 
 def _plain_text(text: str) -> str:
-    """Wikitext -> plain text, also for a stretch with tables, headings and templates."""
-    text = constants.WIKI_TABLE_PATTERN.sub("", text)
-    text = constants.WIKI_HEADING_MARKUP_PATTERN.sub(r"\2.", text)
+    """clean_value + drops tables, flattens headings."""
+    text = WIKI_TABLE_PATTERN.sub("", text)
+    text = WIKI_HEADING_MARKUP_PATTERN.sub(r"\2.", text)
     plain = clean_value(text)
-    plain = constants.WIKI_EMPTY_PARENTHESES_PATTERN.sub("", plain)
-    plain = constants.WIKI_STRAY_OPENING_PATTERN.sub("(", plain)
-    plain = constants.WIKI_STRAY_SEPARATOR_PATTERN.sub(r"\1 ", plain)
-    return constants.WIKI_SPACE_PATTERN.sub(" ", plain).strip()
+    plain = WIKI_EMPTY_PARENTHESES_PATTERN.sub("", plain)
+    plain = WIKI_STRAY_OPENING_PATTERN.sub("(", plain)
+    plain = WIKI_STRAY_SEPARATOR_PATTERN.sub(r"\1 ", plain)
+    return WIKI_SPACE_PATTERN.sub(" ", plain).strip()
 
 
 def _cut(plain: str, limit: int) -> str:
@@ -597,14 +649,12 @@ def _cut(plain: str, limit: int) -> str:
 
 
 def extract_lead_and_body(head: str) -> tuple[Optional[str], Optional[str]]:
-    """(lead, body) as plain text.
+    """(lead, body) as plain text, approximate (inline templates are dropped).
 
-    lead: what stands after the infobox and the leading templates, up to the first "==Heading==".
-    body: the level-2 sections whose heading is wanted (WIKI_WANTED_SECTION_PATTERN), each cut to
-    WIKI_SECTION_MAX_CHARS, joined as "Heading\ntext", all of it cut to WIKI_BODY_MAX_CHARS.
-    Approximate: templates inside sentences are dropped."""
-    text = constants.WIKI_COMMENT_PATTERN.sub("", head)
-    text = constants.WIKI_REF_PATTERN.sub("", text)
+    lead: text before the first "==Heading==".
+    body: wanted level-2 sections (WIKI_WANTED_SECTION_PATTERN) as "Heading\ntext", capped per section and in total."""
+    text = WIKI_COMMENT_PATTERN.sub("", head)
+    text = WIKI_REF_PATTERN.sub("", text)
 
     infobox = first_infobox(text)
 
@@ -612,14 +662,14 @@ def extract_lead_and_body(head: str) -> tuple[Optional[str], Optional[str]]:
         text = text.replace(infobox, "", 1)
 
     text = _strip_leading_blocks(text)
-    headings = list(constants.WIKI_SECTION_PATTERN.finditer(text))
+    headings = list(WIKI_SECTION_PATTERN.finditer(text))
 
     lead_text = text if len(headings) == 0 else text[:headings[0].start()]
     lead = _plain_text(lead_text)
     lead_result: Optional[str] = None
 
     if lead != "":
-        lead_result = _cut(lead, constants.WIKI_LEAD_MAX_CHARS)
+        lead_result = _cut(lead, WIKI_LEAD_MAX_CHARS)
 
     parts: list[str] = []
     used = 0
@@ -627,7 +677,7 @@ def extract_lead_and_body(head: str) -> tuple[Optional[str], Optional[str]]:
     for index, heading in enumerate(headings):
         title = heading.group(1).strip()
 
-        if constants.WIKI_WANTED_SECTION_PATTERN.search(clean_value(title)) is None:
+        if WIKI_WANTED_SECTION_PATTERN.search(clean_value(title)) is None:
             continue
 
         section_end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
@@ -636,17 +686,17 @@ def extract_lead_and_body(head: str) -> tuple[Optional[str], Optional[str]]:
         if section == "":
             continue
 
-        piece = clean_value(title) + "\n" + _cut(section, constants.WIKI_SECTION_MAX_CHARS)
+        piece = clean_value(title) + "\n" + _cut(section, WIKI_SECTION_MAX_CHARS)
         parts.append(piece)
         used += len(piece)
 
-        if used >= constants.WIKI_BODY_MAX_CHARS:
+        if used >= WIKI_BODY_MAX_CHARS:
             break
 
     body_result: Optional[str] = None
 
     if len(parts) > 0:
-        body_result = _cut("\n\n".join(parts), constants.WIKI_BODY_MAX_CHARS)
+        body_result = _cut("\n\n".join(parts), WIKI_BODY_MAX_CHARS)
 
     return lead_result, body_result
 
@@ -663,32 +713,32 @@ def from_categories(categories: list[str]) -> dict[str, object]:
     country: Optional[str] = None
 
     for category in categories:
-        name = constants.WIKI_SPACE_PATTERN.sub(" ", category).strip()
+        name = WIKI_SPACE_PATTERN.sub(" ", category).strip()
 
-        birth = constants.WIKI_CATEGORY_BIRTH_PATTERN.match(name)
+        birth = WIKI_CATEGORY_BIRTH_PATTERN.match(name)
 
         if birth is not None and birth_year is None:
             sign = -1 if birth.group(2) is not None else 1
             birth_year = sign * int(birth.group(1))
 
-        death = constants.WIKI_CATEGORY_DEATH_PATTERN.match(name)
+        death = WIKI_CATEGORY_DEATH_PATTERN.match(name)
 
         if death is not None and death_year is None:
             sign = -1 if death.group(2) is not None else 1
             death_year = sign * int(death.group(1))
 
-        played = constants.WIKI_CATEGORY_GAMES_PATTERN.search(name)
+        played = WIKI_CATEGORY_GAMES_PATTERN.search(name)
 
         if played is not None:
             games.add(f"{played.group(1)} {played.group(2).capitalize()}")
 
-        medal = constants.WIKI_CATEGORY_MEDAL_TYPE_PATTERN.match(name)
+        medal = WIKI_CATEGORY_MEDAL_TYPE_PATTERN.match(name)
 
         if medal is not None:
             kinds.add(medal.group(1).lower())
 
         if country is None:
-            home = constants.WIKI_CATEGORY_COUNTRY_PATTERN.match(name)
+            home = WIKI_CATEGORY_COUNTRY_PATTERN.match(name)
 
             if home is not None:
                 country = home.group(1).strip()
@@ -716,8 +766,7 @@ def _text_or_none(raw: str) -> Optional[str]:
 
 
 def extract_person(head: Optional[str], categories: Optional[list[str]]) -> dict[str, object]:
-    """All attributes of one article. `head` is the first WIKI_HEAD_CHARS characters of the wikitext, `categories`
-    are the category names of the whole article. Missing values are None."""
+    """head: first WIKI_HEAD_CHARS of the wikitext, categories: from the whole article. Missing -> None."""
     result: dict[str, object] = {name: None for name in FIELD_NAMES}
     result["olympic_gold"] = 0
     result["olympic_silver"] = 0

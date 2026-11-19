@@ -1,9 +1,9 @@
 from collections import deque
 from dataclasses import dataclass
-import constants
 from common.clock import utc_now_iso
 from common.log import log_alert
 from common.tsv import TsvAppender, read_rows
+from constants.crawler import FRONTIER_COLUMNS, FRONTIER_PATH
 
 @dataclass
 class FrontierEntry:
@@ -19,14 +19,14 @@ class FrontierEntry:
 
 class Frontier:
     def __init__(self) -> None:
-        self._appender = TsvAppender(constants.FRONTIER_PATH, constants.FRONTIER_COLUMNS)
+        self._appender = TsvAppender(FRONTIER_PATH, FRONTIER_COLUMNS)
         self._seen: set[str] = set()
         self._queue: deque[FrontierEntry] = deque()
         self._loaded: list[FrontierEntry] = []
         self._read_existing()
 
     def _read_existing(self) -> None:
-        rows, skipped = read_rows(constants.FRONTIER_PATH, constants.FRONTIER_COLUMNS)
+        rows, skipped = read_rows(FRONTIER_PATH, FRONTIER_COLUMNS)
 
         for row in rows:
             try:
@@ -44,7 +44,7 @@ class Frontier:
             self._loaded.append(FrontierEntry(url, depth, row[2], row[3], row[4]))
 
         if skipped > 0:
-            log_alert(f"skipped {skipped} malformed rows in {constants.FRONTIER_PATH}")
+            log_alert(f"skipped {skipped} malformed rows in {FRONTIER_PATH}")
 
     def load(self, done: set[str]) -> None:
         for entry in self._loaded:

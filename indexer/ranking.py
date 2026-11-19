@@ -3,22 +3,13 @@ import math
 from collections import Counter
 from typing import Callable, Optional
 
-import constants
 from common.log import log_info
+from constants.indexer import BM25_B, BM25_K1
 from indexer.storage import IndexReader
 from indexer.text import tokenize
 
-# tf-idf rankings follow the worked example in the lecture ("Príklad na skóre dokumentu"):
-#   w(t,q) = tf(t,q) * idf(t)                      query side, natural tf
-#   w(t,d) = (1 + log10 tf(t,d)) / ||d||           document side, log scaling + Euclid norm
-#   Score(q,d) = sum over t in q of w(t,q) * w(t,d)
-# ||d|| is the length of the log-tf vector of the document (stored in docs.tsv).
-# The two idf methods below are the ones from "Modifikácie df_t - Sumarizácia".
-#
-# bm25 follows "Okapi BM25 score":
-#   Score(q,d) = sum over t in q of idf(t) * tf * (k1 + 1) / (tf + k1 * (1 - b + b * |d| / avg|d|))
-#   idf(t) = log10((N - df + 0.5) / (df + 0.5)), set to 0 when negative (the first fix on the slide:
-#   terms in more than half of the documents are ignored)
+# tf-idf:  Score(q,d) = sum_t tf(t,q) * idf(t) * (1 + log10 tf(t,d)) / ||d||   (||d|| from docs.tsv)
+# bm25:    Score(q,d) = sum_t idf(t) * tf * (k1 + 1) / (tf + k1 * (1 - b + b * |d| / avg|d|)), idf clamped at 0
 
 
 def tf_weight(tf: int) -> float:
@@ -35,7 +26,7 @@ def idf_classic(n_docs: int, df: int) -> float:
 
 
 def idf_probabilistic(n_docs: int, df: int) -> float:
-    """probabilistic idf = max(0, log10((N - df) / df)); terms in more than half of the documents get 0"""
+    """probabilistic idf = max(0, log10((N - df) / df))"""
     if df >= n_docs:
         return 0.0
 
@@ -61,7 +52,7 @@ def _score_tfidf(
     idf_function: Callable[[int, int], float],
     allowed: Optional[set[int]],
 ) -> dict[int, float]:
-    """allowed: only these documents are scored (AND mode), None scores every document with a match (OR mode)."""
+    """allowed: doc ids to score (AND), None = any match (OR)."""
     scores: dict[int, float] = {}
 
     for term, query_tf in Counter(tokenize(query)).items():
@@ -112,21 +103,16 @@ def _score_bm25(reader: IndexReader, query: str, allowed: Optional[set[int]]) ->
             if allowed is not None and doc_id not in allowed:
                 continue
 
-            length_part = constants.BM25_K1 * (
-                1.0 - constants.BM25_B + constants.BM25_B * reader.lengths[doc_id] / reader.avg_length
+            length_part = BM25_K1 * (
+                1.0 - BM25_B + BM25_B * reader.lengths[doc_id] / reader.avg_length
             )
-            scores[doc_id] = scores.get(doc_id, 0.0) + weight * tf * (constants.BM25_K1 + 1.0) / (tf + length_part)
+            scores[doc_id] = scores.get(doc_id, 0.0) + weight * tf * (BM25_K1 + 1.0) / (tf + length_part)
 
     return scores
 
 
 def documents_with_all_terms(reader: IndexReader, query: str) -> set[int]:
-    """AND: ids of the documents that contain every word of the query.
-
-    The postings lists are intersected starting from the rarest term (lowest df): the candidate set
-    can only shrink, so the long lists of common terms are intersected with an already small set.
-    A word that is not in the index makes the result empty.
-    """
+    """Docs containing every query term. Intersects rarest term first; an unknown term -> empty."""
     entries: list[tuple[int, int]] = []
 
     for term in set(tokenize(query)):
@@ -138,7 +124,7 @@ def documents_with_all_terms(reader: IndexReader, query: str) -> set[int]:
 
         entries.append(entry)
 
-    entries.sort()  # by df, the rarest term first
+    entries.sort()  # by df
     candidates: Optional[set[int]] = None
 
     for df, offset in entries:
@@ -154,11 +140,7 @@ def documents_with_all_terms(reader: IndexReader, query: str) -> set[int]:
 def rank(
     reader: IndexReader, query: str, method: str, top_k: int, require_all: bool = False
 ) -> list[tuple[int, float]]:
-    """Returns up to top_k (doc_id, score) pairs, best first. Only documents with a non-zero score.
-
-    require_all=False: OR, every document that contains at least one query word is scored.
-    require_all=True: AND, only documents that contain every query word are scored (same scores as in OR).
-    """
+    """Up to top_k (doc_id, score), best first. require_all: AND filter, scores are the same as OR."""
     allowed: Optional[set[int]] = documents_with_all_terms(reader, query) if require_all else None
 
     if method == "bm25":
@@ -166,5 +148,5 @@ def rank(
     else:
         scores = _score_tfidf(reader, query, IDF_FUNCTIONS[method], allowed)
 
-    # Ties are broken by the smaller doc id so the output is stable between runs.
+    # Ties -> smaller doc id, stable output.
     return heapq.nlargest(top_k, scores.items(), key=lambda item: (item[1], -item[0]))

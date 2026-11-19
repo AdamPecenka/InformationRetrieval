@@ -2,8 +2,19 @@ import time
 from dataclasses import dataclass
 from urllib import robotparser
 import requests
-import constants
 from common.log import log_error, log_info
+from constants.common import BASE_URL
+from constants.crawler import (
+    CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_CRAWL_DELAY_SECONDS,
+    MAX_REDIRECTS,
+    READ_TIMEOUT_SECONDS,
+    REQUEST_HEADERS,
+    ROBOTS_REFRESH_SECONDS,
+    ROBOTS_RETRY_SECONDS,
+    STATUS_NETWORK_ERROR,
+    USER_AGENT_TOKEN,
+)
 
 
 @dataclass
@@ -18,7 +29,7 @@ class FetchResult:
 
 
 def _parse_retry_after(value: str | None) -> float | None:
-    """Retry-After in seconds. The HTTP-date form is ignored (rare)."""
+    """Retry-After seconds; HTTP-date form ignored."""
     if value is None:
         return None
     try:
@@ -30,12 +41,12 @@ def _parse_retry_after(value: str | None) -> float | None:
 class Fetcher:
     def __init__(self) -> None:
         self._session = requests.Session()
-        self._session.headers.update(constants.REQUEST_HEADERS)
-        self._session.max_redirects = constants.MAX_REDIRECTS
+        self._session.headers.update(REQUEST_HEADERS)
+        self._session.max_redirects = MAX_REDIRECTS
         self._robots: robotparser.RobotFileParser | None = None
         self._next_robots_check: float = 0.0
         self._last_response_at: float | None = None
-        self._crawl_delay: float = constants.DEFAULT_CRAWL_DELAY_SECONDS
+        self._crawl_delay: float = DEFAULT_CRAWL_DELAY_SECONDS
 
     @property
     def crawl_delay(self) -> float:
@@ -44,21 +55,21 @@ class Fetcher:
     def apply_robots_text(self, text: str) -> None:
         parser = robotparser.RobotFileParser()
         parser.parse(text.splitlines())
-        delay = parser.crawl_delay(constants.USER_AGENT_TOKEN)
+        delay = parser.crawl_delay(USER_AGENT_TOKEN)
 
         if delay is None:
-            self._crawl_delay = constants.DEFAULT_CRAWL_DELAY_SECONDS
+            self._crawl_delay = DEFAULT_CRAWL_DELAY_SECONDS
         else:
             self._crawl_delay = float(delay)
 
         self._robots = parser
-        self._next_robots_check = time.monotonic() + constants.ROBOTS_REFRESH_SECONDS
+        self._next_robots_check = time.monotonic() + ROBOTS_REFRESH_SECONDS
 
         log_info(f"robots.txt applied, crawl delay {self._crawl_delay:g}s")
 
     def load_robots(self) -> bool:
 
-        result = self.fetch(constants.BASE_URL + "/robots.txt")
+        result = self.fetch(BASE_URL + "/robots.txt")
 
         if result.status == 200:
             self.apply_robots_text(result.body.decode("utf-8", errors="replace"))
@@ -72,7 +83,7 @@ class Fetcher:
 
         log_error(f"could not load robots.txt: {reason}")
 
-        self._next_robots_check = time.monotonic() + constants.ROBOTS_RETRY_SECONDS
+        self._next_robots_check = time.monotonic() + ROBOTS_RETRY_SECONDS
 
         return False
 
@@ -82,7 +93,7 @@ class Fetcher:
     def is_allowed(self, url: str) -> bool:
         if self._robots is None:
             return False
-        return self._robots.can_fetch(constants.USER_AGENT_TOKEN, url)
+        return self._robots.can_fetch(USER_AGENT_TOKEN, url)
 
     def _wait_for_slot(self) -> None:
         if self._last_response_at is None:
@@ -101,7 +112,7 @@ class Fetcher:
         try:
             response = self._session.get(
                 url,
-                timeout=(constants.CONNECT_TIMEOUT_SECONDS, constants.READ_TIMEOUT_SECONDS),
+                timeout=(CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS),
                 allow_redirects=True,
             )
 
@@ -110,7 +121,7 @@ class Fetcher:
 
             return FetchResult(
                 url=url,
-                status=constants.STATUS_NETWORK_ERROR,
+                status=STATUS_NETWORK_ERROR,
                 body=b"",
                 content_type="",
                 final_url=url,

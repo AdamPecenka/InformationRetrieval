@@ -1,7 +1,7 @@
 import os
 
-import constants
 from common.log import log_error
+from constants.indexer import INDEX_DICTIONARY_PATH, INDEX_DOCS_PATH, INDEX_POSTINGS_PATH
 from indexer.builder import build_index
 from indexer.ranking import RANKING_METHODS, rank
 from indexer.storage import IndexReader
@@ -13,11 +13,8 @@ def run_indexer() -> int:
 
 
 def run_search(query: str, top_k: int, method: str, require_all: bool = True) -> int:
-    """Prints the top_k athletes for the query, once per ranking method ("all" prints every method).
-
-    require_all=True matches documents that contain every query word (AND), False any of them (OR).
-    """
-    for path in (constants.INDEX_DICTIONARY_PATH, constants.INDEX_POSTINGS_PATH, constants.INDEX_DOCS_PATH):
+    """Print top_k per ranking method ("all" = every method). require_all: AND, else OR."""
+    for path in (INDEX_DICTIONARY_PATH, INDEX_POSTINGS_PATH, INDEX_DOCS_PATH):
         if not os.path.exists(path):
             log_error("no index found, run: python main.py index")
             return 1

@@ -1,15 +1,16 @@
 import os
 from dataclasses import dataclass
-import constants
 from common.log import log_alert
 from common.tsv import TsvAppender, read_rows
+from constants.common import DATA_DIR, RAW_ATHLETES_DIR
+from constants.crawler import FETCHED_COLUMNS, FETCHED_PATH
 from crawler.policy import is_terminal_status
 
 
 def write_page(identifier: str, body: bytes) -> str:
-    os.makedirs(constants.RAW_ATHLETES_DIR, exist_ok=True)
+    os.makedirs(RAW_ATHLETES_DIR, exist_ok=True)
 
-    final_path = os.path.join(constants.RAW_ATHLETES_DIR, f"{identifier}.html")
+    final_path = os.path.join(RAW_ATHLETES_DIR, f"{identifier}.html")
     temp_path = final_path + ".tmp"
 
     with open(temp_path, "wb") as handle:
@@ -19,7 +20,7 @@ def write_page(identifier: str, body: bytes) -> str:
 
     os.replace(temp_path, final_path)
 
-    relative = os.path.relpath(final_path, constants.DATA_DIR)
+    relative = os.path.relpath(final_path, DATA_DIR)
     return relative.replace(os.sep, "/")
 
 
@@ -63,16 +64,16 @@ class FetchState:
 
 
 class FetchedLog:
-    """Append-only log of every fetch attempt. The last row of a URL is its state."""
+    """Append-only fetch log, the last row of a URL is its state."""
 
     def __init__(self) -> None:
-        self._appender = TsvAppender(constants.FETCHED_PATH, constants.FETCHED_COLUMNS)
+        self._appender = TsvAppender(FETCHED_PATH, FETCHED_COLUMNS)
 
     def append(self, record: FetchRecord) -> None:
         self._appender.append_rows([record.to_row()])
 
     def load_state(self) -> FetchState:
-        rows, skipped = read_rows(constants.FETCHED_PATH, constants.FETCHED_COLUMNS)
+        rows, skipped = read_rows(FETCHED_PATH, FETCHED_COLUMNS)
         last: dict[str, tuple[int, bool, int]] = {}
 
         for row in rows:
@@ -101,6 +102,6 @@ class FetchedLog:
                 stored_bytes += size
 
         if skipped > 0:
-            log_alert(f"skipped {skipped} malformed rows in {constants.FETCHED_PATH}")
+            log_alert(f"skipped {skipped} malformed rows in {FETCHED_PATH}")
 
         return FetchState(done, stored_count, stored_bytes)

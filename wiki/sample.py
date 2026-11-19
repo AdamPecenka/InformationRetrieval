@@ -1,15 +1,14 @@
-"""Write a few articles' wikitext to text files, to look at real markup before writing regexes.
+"""Dump the wikitext of chosen articles to text files, for inspecting real markup.
 
-A long article is cut to its beginning (infobox, lead) and its end (categories, external links, where the
-Olympedia link usually is). Text in the middle is replaced by a marker that says how much was cut.
+Long articles keep head (infobox, lead) and tail (categories, external links), the middle is cut.
 """
 
 import os
-import re
 
 from pyspark.sql import functions as F
 
 from common.log import log_add, log_alert, log_error, log_info
+from regexes.wiki import WIKI_FILE_NAME_UNSAFE_PATTERN
 from wiki.dump import build_spark
 from wiki.inputs import require_dir
 
@@ -27,7 +26,7 @@ def shorten(text: str, head: int, tail: int) -> str:
 
 
 def file_name(page_id: int, title: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", title).strip("_")
+    cleaned = WIKI_FILE_NAME_UNSAFE_PATTERN.sub("_", title).strip("_")
 
     return f"{page_id}_{cleaned[:40]}.txt"
 
@@ -65,7 +64,7 @@ def run_sample(input_path: str, output_dir: str, titles: list[str], head: int, t
         shortened = shorten(text, head, tail)
         path = os.path.join(output_dir, file_name(int(row["page_id"]), str(row["title"])))
 
-        # newline="" writes the text as it is, so the file matches the wikitext character for character.
+        # newline="": keep the wikitext byte-exact.
         with open(path, "w", encoding="utf-8", newline="") as handle:
             handle.write(shortened)
 

@@ -5,12 +5,12 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import LongType, StringType, StructField, StructType
 
-import constants
 from common.log import log_add, log_info
+from constants.common import ROOT_DIR, SPARK_DRIVER_MEMORY, SPARK_LOCAL_DIR, SPARK_XML_PACKAGE
+from regexes.wiki import WIKI_BIO_REGEX
 from wiki.inputs import require_file
 
-# Explicit schema: without one spark-xml scans the whole input to infer it, which is hopeless on the full dump.
-# XML attributes get the "_" prefix, and element text that also has attributes is "_VALUE".
+# Explicit, inference would scan the whole dump. spark-xml: attributes are "_x", text next to attributes is "_VALUE".
 PAGE_SCHEMA: StructType = StructType([
     StructField("title", StringType(), True),
     StructField("ns", LongType(), True),
@@ -30,31 +30,29 @@ PAGE_SCHEMA: StructType = StructType([
 
 
 def build_spark(app_name: str = "vinf-wiki-parse", with_xml: bool = True) -> SparkSession:
-    # Spark starts separate Python worker processes. They must run this venv's
-    # interpreter, not whichever python happens to be first on PATH.
+    # Workers must use this venv's interpreter, not the first python on PATH.
     os.environ["PYSPARK_PYTHON"] = sys.executable
     os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
-    # Python UDFs are pickled by reference to their module (wiki.extract), so the workers must be able
-    # to import this project: constants.py, wiki/, common/ all live under ROOT_DIR.
+    # UDFs are pickled by module reference, workers must be able to import the project from ROOT_DIR.
     existing_path = os.environ.get("PYTHONPATH", "")
 
-    if constants.ROOT_DIR not in existing_path.split(os.pathsep):
-        os.environ["PYTHONPATH"] = constants.ROOT_DIR if existing_path == "" else constants.ROOT_DIR + os.pathsep + existing_path
+    if ROOT_DIR not in existing_path.split(os.pathsep):
+        os.environ["PYTHONPATH"] = ROOT_DIR if existing_path == "" else ROOT_DIR + os.pathsep + existing_path
 
     builder = (
         SparkSession.builder
         .master("local[*]")
         .appName(app_name)
-        .config("spark.driver.memory", constants.SPARK_DRIVER_MEMORY)
+        .config("spark.driver.memory", SPARK_DRIVER_MEMORY)
     )
 
-    # Only the XML reader needs the spark-xml package. Parquet-only jobs skip it.
+    # spark-xml only for the XML reader.
     if with_xml:
-        builder = builder.config("spark.jars.packages", constants.SPARK_XML_PACKAGE)
+        builder = builder.config("spark.jars.packages", SPARK_XML_PACKAGE)
 
-    if constants.SPARK_LOCAL_DIR != "":
-        builder = builder.config("spark.local.dir", constants.SPARK_LOCAL_DIR)
+    if SPARK_LOCAL_DIR != "":
+        builder = builder.config("spark.local.dir", SPARK_LOCAL_DIR)
 
     return builder.getOrCreate()
 
@@ -84,7 +82,7 @@ def select_articles(pages: DataFrame, bio_only: bool) -> DataFrame:
     )
 
     if bio_only:
-        articles = articles.filter(F.col("wikitext").rlike(constants.WIKI_BIO_REGEX))
+        articles = articles.filter(F.col("wikitext").rlike(WIKI_BIO_REGEX))
 
     return articles
 
@@ -103,7 +101,7 @@ def run_parse(input_path: str, output_path: str, bio_only: bool) -> int:
 
         pages = read_pages(spark, input_path)
 
-        # 1 partition on a big file means the input is not being split, so nothing runs in parallel.
+        # 1 partition on a big input = not split, no parallelism.
         log_info(f"input is read in {pages.rdd.getNumPartitions()} partition(s)")
 
         articles = select_articles(pages, bio_only)

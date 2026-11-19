@@ -1,9 +1,6 @@
-"""Stage 3: person attributes (dates, places, height, weight, medals, categories) from the relevant wikipedia pages.
+"""Stage 3: person attributes from the wiki-filter output (person-flagged pages only).
 
-Input is the output of `wiki-filter`. Only pages with a person signal are processed, because the attributes
-are meaningless for a page about a date or a sport. The regex work on the wikitext runs in a Python UDF
-(wiki/infobox.py), so that Spark only ships the first 40 000 characters
-and the category names to the workers, not the whole article.
+Parsing runs in a Python UDF (wiki/infobox.py) that gets only the head (WIKI_HEAD_CHARS) and the category names.
 """
 from typing import Optional
 
@@ -19,8 +16,9 @@ from pyspark.sql.types import (
     StructType,
 )
 
-import constants
 from common.log import log_add, log_error, log_info
+from constants.wiki import WIKI_HEAD_CHARS
+from regexes.wiki import WIKI_CATEGORY_NAME_REGEX
 from wiki.dump import build_spark
 from wiki.infobox import FIELD_NAMES, extract_person
 from wiki.inputs import require_dir
@@ -69,13 +67,13 @@ _extract_udf = F.udf(_extract_row, ATTRIBUTE_SCHEMA)
 
 
 def select_people(relevant: DataFrame) -> DataFrame:
-    """Pages with a person signal (the same signal that gates `olympedia_id`)."""
+    """Same person signal that gates olympedia_id."""
     return relevant.filter(F.col("person_category") | F.col("person_infobox"))
 
 
 def extract_attributes(people: DataFrame) -> DataFrame:
-    head = F.substring(F.col("wikitext"), 1, constants.WIKI_HEAD_CHARS)
-    categories = F.expr(f"regexp_extract_all(wikitext, r'{constants.WIKI_CATEGORY_NAME_REGEX}', 1)")
+    head = F.substring(F.col("wikitext"), 1, WIKI_HEAD_CHARS)
+    categories = F.expr(f"regexp_extract_all(wikitext, r'{WIKI_CATEGORY_NAME_REGEX}', 1)")
 
     with_attributes = people.withColumn("attributes", _extract_udf(head, categories))
 

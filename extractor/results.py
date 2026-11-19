@@ -1,5 +1,5 @@
-import constants
 from extractor.markup import Cell, split_cells, split_rows, split_tables
+from regexes.extractor import DISCIPLINE_PATTERN, EVENT_STATUS_PATTERN, GAMES_PATTERN, MEDAL_TEXT_PATTERN
 
 
 class _Columns:
@@ -50,10 +50,10 @@ def _find_results_table(section_html: str) -> list[str] | None:
 
 
 def parse_results(section_html: str, athlete_id: str) -> list[dict[str, str]]:
-    """One dict (see constants.RESULT_COLUMNS) per event row.
+    """One dict per event row, keys = RESULT_COLUMNS.
 
-    Layout: a games row ("1976 Summer Olympics | Handball | FRG | ...") sets games and
-    discipline, the event rows below it start with an empty Games cell.
+    A games row ("1976 Summer Olympics | Handball | FRG | ...") sets games + discipline for the
+    event rows below it (their Games cell is empty).
     """
     rows = _find_results_table(section_html)
 
@@ -81,7 +81,7 @@ def parse_results(section_html: str, athlete_id: str) -> list[dict[str, str]]:
         if all(cell.tag == "th" for cell in cells):
             continue
 
-        games_match = constants.GAMES_PATTERN.match(cells[0].text)
+        games_match = GAMES_PATTERN.match(cells[0].text)
 
         if games_match is not None:
             games = cells[0].text
@@ -89,7 +89,7 @@ def parse_results(section_html: str, athlete_id: str) -> list[dict[str, str]]:
             season = games_match.group(2)
 
             discipline_text = _cell_text(cells, columns.event)
-            discipline_match = constants.DISCIPLINE_PATTERN.match(discipline_text)
+            discipline_match = DISCIPLINE_PATTERN.match(discipline_text)
 
             discipline = discipline_text
             sport = discipline_text
@@ -107,7 +107,7 @@ def parse_results(section_html: str, athlete_id: str) -> list[dict[str, str]]:
 
         medal = _cell_text(cells, columns.medal)
 
-        if constants.MEDAL_TEXT_PATTERN.match(medal) is None:
+        if MEDAL_TEXT_PATTERN.match(medal) is None:
             medal = ""
 
         results.append(
@@ -118,7 +118,7 @@ def parse_results(section_html: str, athlete_id: str) -> list[dict[str, str]]:
                 "season": season,
                 "sport": sport,
                 "discipline": discipline,
-                "event": constants.EVENT_STATUS_PATTERN.sub("", event_text).strip(),
+                "event": EVENT_STATUS_PATTERN.sub("", event_text).strip(),
                 "team": _cell_text(cells, columns.noc_team),
                 "position": _cell_text(cells, columns.position),
                 "medal": medal,
@@ -129,10 +129,7 @@ def parse_results(section_html: str, athlete_id: str) -> list[dict[str, str]]:
 
 
 def parse_other_participations(section_html: str) -> list[str]:
-    """Rows of the 'Other participations' table (Games | Role | NOC | As) as 'games: role'.
-
-    Holds the non-competing roles: flag-bearer, torch-bearer, oath taker, ...
-    """
+    """'games: role' per row of the 'Other participations' table (flag-bearer, torch-bearer, ...)."""
     for table_html in split_tables(section_html):
         rows = split_rows(table_html)
 

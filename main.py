@@ -1,6 +1,17 @@
 import argparse
 import sys
-import constants
+from constants.extractor import ATHLETES_TSV_PATH
+from constants.join import WIKI_JOIN_PATH
+from constants.wiki import (
+    WIKI_DUMP_PATH,
+    WIKI_FULL_PAGES_PATH,
+    WIKI_PAGES_PATH,
+    WIKI_PEOPLE_PATH,
+    WIKI_RELEVANT_PATH,
+    WIKI_SAMPLES_DIR,
+    WIKI_SLICE_PAGES,
+    WIKI_SLICE_PATH,
+)
 
 def configure_console() -> None:
     for stream in (sys.stdout, sys.stderr):
@@ -58,29 +69,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     wiki_slice = subparsers.add_parser("wiki-slice",
                                        help="copy the first pages of the wikipedia dump into a small XML file (development)")
-    wiki_slice.add_argument("--input", default=constants.WIKI_DUMP_PATH, help="the dump (.xml.bz2 or .xml)")
-    wiki_slice.add_argument("--output", default=constants.WIKI_SLICE_PATH)
-    wiki_slice.add_argument("--pages", type=int, default=constants.WIKI_SLICE_PAGES)
+    wiki_slice.add_argument("--input", default=WIKI_DUMP_PATH, help="the dump (.xml.bz2 or .xml)")
+    wiki_slice.add_argument("--output", default=WIKI_SLICE_PATH)
+    wiki_slice.add_argument("--pages", type=int, default=WIKI_SLICE_PAGES)
 
     wiki_parse = subparsers.add_parser("wiki-parse",
                                        help="wikipedia XML -> parquet with Spark (articles only, redirects dropped)")
-    wiki_parse.add_argument("--input", default=constants.WIKI_SLICE_PATH,
+    wiki_parse.add_argument("--input", default=WIKI_SLICE_PATH,
                             help="slice or full dump (default: the slice)")
-    wiki_parse.add_argument("--output", default=constants.WIKI_PAGES_PATH)
+    wiki_parse.add_argument("--output", default=WIKI_PAGES_PATH)
     wiki_parse.add_argument("--bio-only", action="store_true", help="keep only pages with birth data")
 
     wiki_filter = subparsers.add_parser("wiki-filter", help="full articles parquet -> persons and Olympic pages")
-    wiki_filter.add_argument("--input", default=constants.WIKI_FULL_PAGES_PATH)
-    wiki_filter.add_argument("--output", default=constants.WIKI_RELEVANT_PATH)
+    wiki_filter.add_argument("--input", default=WIKI_FULL_PAGES_PATH)
+    wiki_filter.add_argument("--output", default=WIKI_RELEVANT_PATH)
 
     wiki_audit = subparsers.add_parser("wiki-audit", help="check the filter against Olympedia athlete names")
-    wiki_audit.add_argument("--athletes", default=constants.WIKI_AUDIT_ATHLETES_PATH)
-    wiki_audit.add_argument("--pages", default=constants.WIKI_FULL_PAGES_PATH)
-    wiki_audit.add_argument("--relevant", default=constants.WIKI_RELEVANT_PATH)
+    wiki_audit.add_argument("--athletes", default=ATHLETES_TSV_PATH)
+    wiki_audit.add_argument("--pages", default=WIKI_FULL_PAGES_PATH)
+    wiki_audit.add_argument("--relevant", default=WIKI_RELEVANT_PATH)
 
     wiki_sample = subparsers.add_parser("wiki-sample", help="write the wikitext of chosen articles to text files")
-    wiki_sample.add_argument("--input", default=constants.WIKI_RELEVANT_PATH)
-    wiki_sample.add_argument("--output", default=constants.WIKI_SAMPLES_DIR)
+    wiki_sample.add_argument("--input", default=WIKI_RELEVANT_PATH)
+    wiki_sample.add_argument("--output", default=WIKI_SAMPLES_DIR)
     wiki_sample.add_argument("--titles", nargs="+", required=True, help="exact article titles")
     wiki_sample.add_argument("--head", type=int, default=8000, help="characters kept from the start")
     wiki_sample.add_argument("--tail", type=int, default=6000, help="characters kept from the end")
@@ -89,16 +100,16 @@ def build_parser() -> argparse.ArgumentParser:
         "wiki-extract",
         help="relevant pages parquet -> parquet of persons with regex-extracted attributes (stage 3)",
     )
-    wiki_extract.add_argument("--input", default=constants.WIKI_RELEVANT_PATH)
-    wiki_extract.add_argument("--output", default=constants.WIKI_PEOPLE_PATH)
+    wiki_extract.add_argument("--input", default=WIKI_RELEVANT_PATH)
+    wiki_extract.add_argument("--output", default=WIKI_PEOPLE_PATH)
 
     wiki_join = subparsers.add_parser(
         "wiki-join",
         help="join Olympedia athletes with wikipedia people: exact id, name + birth date, name + birth year (stage 4)",
     )
-    wiki_join.add_argument("--people", default=constants.WIKI_PEOPLE_PATH)
-    wiki_join.add_argument("--athletes", default=constants.WIKI_AUDIT_ATHLETES_PATH)
-    wiki_join.add_argument("--output", default=constants.WIKI_JOIN_PATH)
+    wiki_join.add_argument("--people", default=WIKI_PEOPLE_PATH)
+    wiki_join.add_argument("--athletes", default=ATHLETES_TSV_PATH)
+    wiki_join.add_argument("--output", default=WIKI_JOIN_PATH)
 
     extract_spark = subparsers.add_parser(
         "extract-spark",

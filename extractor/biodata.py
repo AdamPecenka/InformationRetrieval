@@ -1,37 +1,51 @@
-import constants
+from constants.common import LIST_SEPARATOR
+from constants.extractor import BIODATA_LABELS, BULLET, MONTHS
 from extractor.markup import lines_of, split_cells, split_rows, text_of
+from regexes.extractor import (
+    AGED_PATTERN,
+    ANCHOR_PATTERN,
+    COUNTRY_HREF_PATTERN,
+    DATE_DMY_PATTERN,
+    DATE_MY_PATTERN,
+    DATE_Y_PATTERN,
+    HEIGHT_PATTERN,
+    MEDAL_COUNT_PATTERN,
+    PERSONAL_BEST_PATTERN,
+    TRAILING_NOC_PATTERN,
+    WEIGHT_PATTERN,
+)
 
 
 def split_name(raw: str) -> tuple[str, str, str]:
     """'Sarah Rozanne•Osvath' -> ('Sarah Rozanne Osvath', 'Sarah Rozanne', 'Osvath')."""
-    if constants.BULLET not in raw:
+    if BULLET not in raw:
         return raw.strip(), "", raw.strip()
 
-    given, _, family = raw.partition(constants.BULLET)
+    given, _, family = raw.partition(BULLET)
     given = given.strip()
     family = family.strip()
     return f"{given} {family}".strip(), given, family
 
 
 def parse_date_iso(raw: str) -> str:
-    """Full or partial date -> YYYY-MM-DD / YYYY-MM / YYYY. Anything else ("c. 1900") is kept as written."""
+    """-> YYYY-MM-DD / YYYY-MM / YYYY, anything else ("c. 1900") as is."""
     raw = raw.strip()
 
-    match = constants.DATE_DMY_PATTERN.match(raw)
+    match = DATE_DMY_PATTERN.match(raw)
     if match is not None:
-        month = constants.MONTHS.get(match.group(2).lower())
+        month = MONTHS.get(match.group(2).lower())
         if month is None:
             return raw
         return f"{match.group(3)}-{month:02d}-{int(match.group(1)):02d}"
 
-    match = constants.DATE_MY_PATTERN.match(raw)
+    match = DATE_MY_PATTERN.match(raw)
     if match is not None:
-        month = constants.MONTHS.get(match.group(1).lower())
+        month = MONTHS.get(match.group(1).lower())
         if month is None:
             return raw
         return f"{match.group(2)}-{month:02d}"
 
-    match = constants.DATE_Y_PATTERN.match(raw)
+    match = DATE_Y_PATTERN.match(raw)
     if match is not None:
         return match.group(1)
 
@@ -40,7 +54,7 @@ def parse_date_iso(raw: str) -> str:
 
 def parse_date_place(raw: str) -> tuple[str, str, str]:
     """'13 August 2021 (aged 23 ...) in Mount Elgon, Bungoma (KEN)' -> (iso_date, place, country_code)."""
-    text = constants.AGED_PATTERN.sub("", raw).strip()
+    text = AGED_PATTERN.sub("", raw).strip()
     date_part, separator, place_part = text.partition(" in ")
 
     if separator == "":
@@ -48,7 +62,7 @@ def parse_date_place(raw: str) -> tuple[str, str, str]:
 
     place = place_part.strip()
     country = ""
-    match = constants.TRAILING_NOC_PATTERN.match(place)
+    match = TRAILING_NOC_PATTERN.match(place)
 
     if match is not None:
         place = match.group("place").strip()
@@ -58,7 +72,7 @@ def parse_date_place(raw: str) -> tuple[str, str, str]:
 
 
 def _join(items: list[str]) -> str:
-    return constants.LIST_SEPARATOR.join(item for item in items if item != "")
+    return LIST_SEPARATOR.join(item for item in items if item != "")
 
 
 def _comma_list(raw: str) -> str:
@@ -66,12 +80,12 @@ def _comma_list(raw: str) -> str:
 
 
 def _bullet_list(raw: str) -> str:
-    return _join([part.strip() for part in raw.split(constants.BULLET)])
+    return _join([part.strip() for part in raw.split(BULLET)])
 
 
 def _link_texts(raw_html: str) -> list[str]:
-    """Text of every link in a cell. A cell without links gives its plain text."""
-    texts = [text_of(anchor) for anchor in constants.ANCHOR_PATTERN.findall(raw_html)]
+    """Link texts of a cell, or its plain text if it has no links."""
+    texts = [text_of(anchor) for anchor in ANCHOR_PATTERN.findall(raw_html)]
     texts = [text for text in texts if text != ""]
 
     if texts:
@@ -86,7 +100,7 @@ def _link_texts(raw_html: str) -> list[str]:
 
 
 def _labelled_rows(section_html: str) -> dict[str, str]:
-    """Label -> raw html of the value cell, for every row whose first cell is a known label."""
+    """BIODATA_LABELS label -> raw html of its value cell."""
     found: dict[str, str] = {}
 
     for row_html in split_rows(section_html):
@@ -97,17 +111,17 @@ def _labelled_rows(section_html: str) -> dict[str, str]:
 
         label = cells[0].text
 
-        if label in constants.BIODATA_LABELS and label not in found:
+        if label in BIODATA_LABELS and label not in found:
             found[label] = cells[1].raw
 
     return found
 
 
 def parse_medal_counts(section_html: str) -> dict[str, str]:
-    """Counts from the medal box (first column: OG, or YOG for youth-only athletes)."""
+    """Medal box counts (first column: OG, or YOG for youth-only athletes)."""
     counts: dict[str, str] = {}
 
-    for label, number in constants.MEDAL_COUNT_PATTERN.findall(section_html):
+    for label, number in MEDAL_COUNT_PATTERN.findall(section_html):
         key = label.lower()
 
         if key not in counts:
@@ -121,16 +135,16 @@ def parse_personal_bests(*fragments: str) -> str:
 
     for fragment in fragments:
         for line in lines_of(fragment):
-            match = constants.PERSONAL_BEST_PATTERN.match(line)
+            match = PERSONAL_BEST_PATTERN.match(line)
 
             if match is not None:
                 found.append(match.group(1))
 
-    return constants.LIST_SEPARATOR.join(found)
+    return LIST_SEPARATOR.join(found)
 
 
 def parse_biodata(section_html: str) -> dict[str, str]:
-    """Fields of the 'Biographical information' table. Rows that are missing give empty strings."""
+    """'Biographical information' table, missing rows -> ""."""
     rows = _labelled_rows(section_html)
 
     def text(label: str) -> str:
@@ -140,7 +154,7 @@ def parse_biodata(section_html: str) -> dict[str, str]:
 
     def codes(label: str) -> list[str]:
         if label in rows:
-            return constants.COUNTRY_HREF_PATTERN.findall(rows[label])
+            return COUNTRY_HREF_PATTERN.findall(rows[label])
         return []
 
     def names(label: str) -> list[str]:
@@ -172,8 +186,8 @@ def parse_biodata(section_html: str) -> dict[str, str]:
     fields["died_country"] = died_country
 
     measurements = text("Measurements")
-    height = constants.HEIGHT_PATTERN.search(measurements)
-    weight = constants.WEIGHT_PATTERN.search(measurements)
+    height = HEIGHT_PATTERN.search(measurements)
+    weight = WEIGHT_PATTERN.search(measurements)
     fields["height_cm"] = ""
     fields["weight_kg"] = ""
 

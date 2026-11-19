@@ -1,6 +1,6 @@
-"""Decisions about HTTP outcomes. Pure functions, easy to test."""
+"""HTTP outcome decisions."""
 
-import constants
+from constants.crawler import BACKOFF_BASE_SECONDS, BACKOFF_CAP_SECONDS, STATUS_NETWORK_ERROR
 
 OUTCOME_OK = "ok"
 OUTCOME_GONE = "gone"
@@ -10,13 +10,12 @@ OUTCOME_SKIP = "skip"
 
 
 def classify(status: int) -> str:
-    """What the crawler should do with a response status.
-
+    """
     ok       200: process the page
     gone     404/410: never retry
     retry    network error, 429, 5xx: try again later
-    blocked  403: the site is refusing us, the crawler stops
-    skip     anything else (other 4xx, the pseudo statuses): never retry
+    blocked  403: stop the crawler
+    skip     other 4xx, pseudo statuses: never retry
     """
     if status == 200:
         return OUTCOME_OK
@@ -24,7 +23,7 @@ def classify(status: int) -> str:
         return OUTCOME_GONE
     if status == 403:
         return OUTCOME_BLOCKED
-    if status == 429 or status >= 500 or status == constants.STATUS_NETWORK_ERROR:
+    if status == 429 or status >= 500 or status == STATUS_NETWORK_ERROR:
         return OUTCOME_RETRY
     return OUTCOME_SKIP
 
@@ -34,11 +33,11 @@ def is_terminal_status(status: int) -> bool:
 
 
 def backoff_seconds(consecutive_failures: int, retry_after_seconds: float | None) -> float:
-    cap = constants.BACKOFF_CAP_SECONDS
+    cap = BACKOFF_CAP_SECONDS
 
     if retry_after_seconds is not None:
         return min(max(retry_after_seconds, 0.0), cap)
 
     exponent = min(max(consecutive_failures - 1, 0), 20)
 
-    return min(constants.BACKOFF_BASE_SECONDS * (2**exponent), cap)
+    return min(BACKOFF_BASE_SECONDS * (2**exponent), cap)

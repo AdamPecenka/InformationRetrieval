@@ -19,7 +19,7 @@ are slow there. Windows sleep also pauses WSL, and with it the crawl.
 ### TLDR
 
 - Starts at the base URL and follows only the whitelisted links
-  (`URL_WHITELIST` in `constants.py`), breadth first.
+  (`URL_WHITELIST` in `regexes/crawler.py`), breadth first.
 - Waits the `Crawl-delay` from robots.txt between requests (10 s on Olympedia).
 - Stores an athlete page only if it has a Biography section and at least one
   medal. Every other page is read for links and discarded.
@@ -54,13 +54,13 @@ are reported as `[!]` (first ones per page, then a summary count).
 Mined from the biography (rule based, the whole sentence is kept for each hit):
 `career_events`, `post_career` + `post_career_roles`, `other_sports`,
 `world_records_text`. `world_records` comes from "List mentions". All patterns
-are in `constants.py`.
+are in `regexes/extractor.py`.
 
 ### Indexer
 `python main.py index`
 
 Builds an inverted index from `data/extracted/athletes.tsv` (one athlete = one
-document, the indexed columns are `INDEX_TEXT_COLUMNS` in `constants.py`). The
+document, the indexed columns are `INDEX_TEXT_COLUMNS` in `constants/indexer.py`). The
 text of the athlete's rows in `results.tsv` (`INDEX_RESULT_COLUMNS`, joined on
 `athlete_id`) is added to the same document. It is rebuilt from scratch on every
 run. Tokens are lower-cased, accents are stripped, no stop words and no
@@ -99,7 +99,7 @@ that miss a word. The two tf-idf rankings follow the lecture example:
 |---|---|
 | `idf` | tf-idf with `idf = log10(N / df)` |
 | `prob` | tf-idf with the probabilistic `idf = max(0, log10((N - df) / df))` |
-| `bm25` | Okapi BM25, `idf = max(0, log10((N - df + 0.5) / (df + 0.5)))`, `k1 = 1.2`, `b = 0.3` (`BM25_K1`, `BM25_B` in `constants.py`), document length in tokens |
+| `bm25` | Okapi BM25, `idf = max(0, log10((N - df + 0.5) / (df + 0.5)))`, `k1 = 1.2`, `b = 0.3` (`BM25_K1`, `BM25_B` in `constants/indexer.py`), document length in tokens |
 
 ### Diagram
 

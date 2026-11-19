@@ -9,12 +9,7 @@ def format_row(fields: list[str]) -> str:
     return "\t".join(clean_field(field) for field in fields) + "\n"
 
 def prepare_file(path: str, header: list[str]) -> None:
-    """Make sure the file exists with a header and ends on a full line.
-
-    If the previous run was killed in the middle of a write, the last line is
-    incomplete. It is dropped here, otherwise the next append would glue a new
-    row onto the broken one and damage both.
-    """
+    """Ensure the file exists with a header and ends on a full line (drops a half-written last row)."""
     directory = os.path.dirname(path)
     if directory != "":
         os.makedirs(directory, exist_ok=True)
@@ -46,7 +41,7 @@ def prepare_file(path: str, header: list[str]) -> None:
             file_handler.write(header_line.encode("utf-8"))
 
 def read_rows(path: str, header: list[str]) -> tuple[list[list[str]], int]:
-    """Read all complete rows. Returns (rows, number_of_skipped_malformed_rows)."""
+    """(rows, skipped malformed rows count)."""
     rows: list[list[str]] = []
     skipped = 0
 
