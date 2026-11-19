@@ -76,7 +76,12 @@ def _read_block(path: str, number: int) -> Iterator[tuple[str, int, str]]:
 
 
 def _merge_blocks(block_paths: list[str], norms_squared: array) -> tuple[int, int]:
-    """Merges the blocks into dictionary.tsv.tmp and postings.bin.tmp. Returns (terms, postings).
+    """
+    Merges the blocks into dictionary.tsv.tmp and postings.tsv.tmp. Returns (terms, postings).
+
+    postings.tsv has one line per term: term<TAB>doc:tf,doc:tf,... The dictionary stores the byte
+    offset of that line. The file is written in binary mode so the offsets are exact (no newline
+    translation on Windows) and the lines are UTF-8.
 
     While the postings of a term pass through, the squared length of every document vector
     (log scaled tf) is accumulated, it is needed for the Euclidean normalization.

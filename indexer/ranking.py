@@ -1,7 +1,7 @@
 import heapq
 import math
 from collections import Counter
-from typing import Callable
+from typing import Callable, Optional
 
 import constants
 from common.log import log_info
@@ -55,7 +55,13 @@ IDF_FUNCTIONS: dict[str, Callable[[int, int], float]] = {
 RANKING_METHODS: tuple[str, ...] = ("idf", "prob", "bm25")
 
 
-def _score_tfidf(reader: IndexReader, query: str, idf_function: Callable[[int, int], float]) -> dict[int, float]:
+def _score_tfidf(
+    reader: IndexReader,
+    query: str,
+    idf_function: Callable[[int, int], float],
+    allowed: Optional[set[int]],
+) -> dict[int, float]:
+    """allowed: only these documents are scored (AND mode), None scores every document with a match (OR mode)."""
     scores: dict[int, float] = {}
 
     for term, query_tf in Counter(tokenize(query)).items():
@@ -72,6 +78,9 @@ def _score_tfidf(reader: IndexReader, query: str, idf_function: Callable[[int, i
             continue
 
         for doc_id, tf in reader.read_postings(df, offset):
+            if allowed is not None and doc_id not in allowed:
+                continue
+
             scores[doc_id] = scores.get(doc_id, 0.0) + query_weight * tf_weight(tf)
 
     for doc_id in scores:
@@ -83,7 +92,7 @@ def _score_tfidf(reader: IndexReader, query: str, idf_function: Callable[[int, i
     return scores
 
 
-def _score_bm25(reader: IndexReader, query: str) -> dict[int, float]:
+def _score_bm25(reader: IndexReader, query: str, allowed: Optional[set[int]]) -> dict[int, float]:
     scores: dict[int, float] = {}
 
     for term, query_tf in Counter(tokenize(query)).items():
@@ -100,6 +109,9 @@ def _score_bm25(reader: IndexReader, query: str) -> dict[int, float]:
             continue
 
         for doc_id, tf in reader.read_postings(df, offset):
+            if allowed is not None and doc_id not in allowed:
+                continue
+
             length_part = constants.BM25_K1 * (
                 1.0 - constants.BM25_B + constants.BM25_B * reader.lengths[doc_id] / reader.avg_length
             )
@@ -108,12 +120,51 @@ def _score_bm25(reader: IndexReader, query: str) -> dict[int, float]:
     return scores
 
 
-def rank(reader: IndexReader, query: str, method: str, top_k: int) -> list[tuple[int, float]]:
-    """Returns up to top_k (doc_id, score) pairs, best first. Only documents with a non-zero score."""
+def documents_with_all_terms(reader: IndexReader, query: str) -> set[int]:
+    """AND: ids of the documents that contain every word of the query.
+
+    The postings lists are intersected starting from the rarest term (lowest df): the candidate set
+    can only shrink, so the long lists of common terms are intersected with an already small set.
+    A word that is not in the index makes the result empty.
+    """
+    entries: list[tuple[int, int]] = []
+
+    for term in set(tokenize(query)):
+        entry = reader.dictionary.get(term)
+
+        if entry is None:
+            log_info(f"term not in the index: {term}, no document contains every word")
+            return set()
+
+        entries.append(entry)
+
+    entries.sort()  # by df, the rarest term first
+    candidates: Optional[set[int]] = None
+
+    for df, offset in entries:
+        doc_ids = {doc_id for doc_id, _ in reader.read_postings(df, offset)}
+        candidates = doc_ids if candidates is None else candidates & doc_ids
+
+        if not candidates:
+            return set()
+
+    return candidates if candidates is not None else set()
+
+
+def rank(
+    reader: IndexReader, query: str, method: str, top_k: int, require_all: bool = False
+) -> list[tuple[int, float]]:
+    """Returns up to top_k (doc_id, score) pairs, best first. Only documents with a non-zero score.
+
+    require_all=False: OR, every document that contains at least one query word is scored.
+    require_all=True: AND, only documents that contain every query word are scored (same scores as in OR).
+    """
+    allowed: Optional[set[int]] = documents_with_all_terms(reader, query) if require_all else None
+
     if method == "bm25":
-        scores = _score_bm25(reader, query)
+        scores = _score_bm25(reader, query, allowed)
     else:
-        scores = _score_tfidf(reader, query, IDF_FUNCTIONS[method])
+        scores = _score_tfidf(reader, query, IDF_FUNCTIONS[method], allowed)
 
     # Ties are broken by the smaller doc id so the output is stable between runs.
     return heapq.nlargest(top_k, scores.items(), key=lambda item: (item[1], -item[0]))

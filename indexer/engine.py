@@ -12,8 +12,11 @@ def run_indexer() -> int:
     return build_index()
 
 
-def run_search(query: str, top_k: int, method: str) -> int:
-    """Prints the top_k athletes for the query, once per ranking method ("all" prints every method)."""
+def run_search(query: str, top_k: int, method: str, require_all: bool = True) -> int:
+    """Prints the top_k athletes for the query, once per ranking method ("all" prints every method).
+
+    require_all=True matches documents that contain every query word (AND), False any of them (OR).
+    """
     for path in (constants.INDEX_DICTIONARY_PATH, constants.INDEX_POSTINGS_PATH, constants.INDEX_DOCS_PATH):
         if not os.path.exists(path):
             log_error("no index found, run: python main.py index")
@@ -32,8 +35,8 @@ def run_search(query: str, top_k: int, method: str) -> int:
             return 1
 
         for current in methods:
-            results = rank(reader, query, current, top_k)
-            print(f"--- ranking '{current}': {len(results)} hits ---")
+            results = rank(reader, query, current, top_k, require_all)
+            print(f"--- ranking '{current}', {'AND' if require_all else 'OR'}: {len(results)} hits ---")
 
             for position, (doc_id, score) in enumerate(results, start=1):
                 print(f"{position:>3}. {score:8.4f}  {reader.athlete_ids[doc_id]:>8}  {reader.names[doc_id]}")
