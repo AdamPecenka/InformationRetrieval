@@ -5,4 +5,5 @@ __pycache__/
 
 data/
 notes.md
-setup_venv.ps1
+scripts/setup_venv.ps1
+/scripts/lucene_smoke.py

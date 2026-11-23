@@ -1,7 +1,14 @@
 import argparse
 import sys
-from constants.extractor import ATHLETES_TSV_PATH
+from constants.extractor import ATHLETES_TSV_PATH, RESULTS_TSV_PATH
 from constants.join import WIKI_JOIN_PATH
+from constants.lucene import (
+    LUCENE_BM25_B,
+    LUCENE_BM25_K1,
+    LUCENE_COMPARISON_REPEATS,
+    LUCENE_DOCS_PATH,
+    LUCENE_INDEX_DIR,
+)
 from constants.wiki import (
     WIKI_DUMP_PATH,
     WIKI_FULL_PAGES_PATH,
@@ -121,6 +128,64 @@ def build_parser() -> argparse.ArgumentParser:
         help="parse every page again with the plain extractor and compare both outputs",
     )
 
+    lucene_export = subparsers.add_parser(
+        "lucene-export",
+        help="Spark: athletes + results + best Wikipedia page of the join -> one TSV row per athlete for the Lucene index",
+    )
+    lucene_export.add_argument("--athletes", default=ATHLETES_TSV_PATH)
+    lucene_export.add_argument("--results", default=RESULTS_TSV_PATH)
+    lucene_export.add_argument("--joined", default=WIKI_JOIN_PATH)
+    lucene_export.add_argument("--output", default=LUCENE_DOCS_PATH)
+
+    lucene_index = subparsers.add_parser(
+        "lucene-index",
+        help="PyLucene (run in the container): data/lucene/docs.tsv -> Lucene index, always rebuilt from scratch",
+    )
+    lucene_index.add_argument("--docs", default=LUCENE_DOCS_PATH)
+    lucene_index.add_argument("--index", default=LUCENE_INDEX_DIR)
+
+    lucene_search = subparsers.add_parser(
+        "lucene-search",
+        help="PyLucene (run in the container): search the Lucene index, e.g. lucene-search \"sport:swimming born_year:[1980 TO 1989]\"",
+    )
+    lucene_search.add_argument("query", nargs="+", help="Lucene query string (words, field:word, \"phrase\", AND/OR/NOT, word~1, field:[a TO b])")
+    lucene_search.add_argument("--top", type=int, default=10, help="number of results (default: 10)")
+    lucene_search.add_argument(
+        "--mode",
+        choices=["and", "or"],
+        default="and",
+        help="operator between bare words: and = every word must match (default), or = any word",
+    )
+    lucene_search.add_argument(
+        "--similarity",
+        choices=["bm25", "classic"],
+        default="bm25",
+        help="bm25 (default) or classic = Lucene's tf-idf (ClassicSimilarity)",
+    )
+    lucene_search.add_argument("--k1", type=float, default=LUCENE_BM25_K1, help="BM25 k1")
+    lucene_search.add_argument("--b", type=float, default=LUCENE_BM25_B, help="BM25 b")
+    lucene_search.add_argument(
+        "--sport-medal",
+        action="append",
+        default=[],
+        help="athletes with this medal in this sport, e.g. aquatics:gold (repeatable, all must hold)",
+    )
+    lucene_search.add_argument(
+        "--discipline-medal",
+        action="append",
+        default=[],
+        help="athletes with this medal in this discipline, e.g. swimming:gold (repeatable, all must hold)",
+    )
+    lucene_search.add_argument("--index", default=LUCENE_INDEX_DIR)
+
+    lucene_compare = subparsers.add_parser(
+        "lucene-compare",
+        help="PyLucene (run in the container): own index vs Lucene index on the test queries, precision / recall / rank / latency",
+    )
+    lucene_compare.add_argument("--docs", default=LUCENE_DOCS_PATH)
+    lucene_compare.add_argument("--index", default=LUCENE_INDEX_DIR)
+    lucene_compare.add_argument("--repeats", type=int, default=LUCENE_COMPARISON_REPEATS, help="runs per query for the latency mean")
+
     return parser
 
 def main() -> int:
@@ -173,6 +238,25 @@ def main() -> int:
     if args.command == "extract-spark":
         from extractor.spark_job import run_spark_extractor
         return run_spark_extractor(run_verify=args.verify)
+
+    if args.command == "lucene-export":
+        from indexer.lucene_export import run_lucene_export
+        return run_lucene_export(args.athletes, args.results, args.joined, args.output)
+
+    if args.command == "lucene-index":
+        from indexer.lucene_builder import run_lucene_indexer
+        return run_lucene_indexer(args.docs, args.index)
+
+    if args.command == "lucene-search":
+        from indexer.lucene_search import run_lucene_search
+        return run_lucene_search(
+            " ".join(args.query), args.top, args.mode == "and", args.similarity, args.k1, args.b,
+            args.sport_medal, args.discipline_medal, args.index,
+        )
+
+    if args.command == "lucene-compare":
+        from indexer.lucene_compare import run_lucene_compare
+        return run_lucene_compare(args.docs, args.index, args.repeats)
 
     return 1
 
