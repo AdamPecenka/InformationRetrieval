@@ -4,6 +4,11 @@ from constants.common import DATA_DIR
 
 # ---- join: Olympedia athletes <-> wikipedia people (stage 4) ----
 WIKI_JOIN_PATH: str = os.path.join(DATA_DIR, "joined_parquet")
+# Full outer view: matched pairs + unmatched athletes + unmatched Olympic-flagged person pages.
+WIKI_JOIN_FULL_PATH: str = os.path.join(DATA_DIR, "joined_full_parquet")
+JOIN_MATCH_BOTH: str = "both"
+JOIN_MATCH_OLYMPEDIA_ONLY: str = "olympedia_only"
+JOIN_MATCH_WIKI_ONLY: str = "wiki_only"
 
 # Letters NFKD does not decompose.
 JOIN_NAME_LETTER_MAP: dict[str, str] = {

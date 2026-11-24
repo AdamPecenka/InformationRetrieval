@@ -1,4 +1,7 @@
 import os
+from collections.abc import Iterator
+from typing import Optional
+
 from common.log import log_remove
 
 def clean_field(value: object) -> str:
@@ -40,13 +43,10 @@ def prepare_file(path: str, header: list[str]) -> None:
             file_handler.seek(0)
             file_handler.write(header_line.encode("utf-8"))
 
-def read_rows(path: str, header: list[str]) -> tuple[list[list[str]], int]:
-    """(rows, skipped malformed rows count)."""
-    rows: list[list[str]] = []
-    skipped = 0
-
+def iter_rows(path: str, header: list[str]) -> Iterator[Optional[list[str]]]:
+    """Streams the rows, None for a malformed one. Missing file -> nothing."""
     if not os.path.exists(path):
-        return rows, skipped
+        return
 
     expected = len(header)
     header_text = "\t".join(header)
@@ -66,10 +66,22 @@ def read_rows(path: str, header: list[str]) -> tuple[list[list[str]], int]:
             fields = text.split("\t")
 
             if len(fields) != expected:
-                skipped += 1
+                yield None
                 continue
 
-            rows.append(fields)
+            yield fields
+
+def read_rows(path: str, header: list[str]) -> tuple[list[list[str]], int]:
+    """(rows, skipped malformed rows count)."""
+    rows: list[list[str]] = []
+    skipped = 0
+
+    for fields in iter_rows(path, header):
+        if fields is None:
+            skipped += 1
+            continue
+
+        rows.append(fields)
     return rows, skipped
 
 class TsvAppender:

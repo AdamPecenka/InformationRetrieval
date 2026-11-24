@@ -6,7 +6,7 @@ import lucene  # noqa: F401  before any java / org.apache import
 from java.lang import Float, Integer
 from java.nio.file import Paths
 from java.util import HashMap
-from org.apache.lucene.document import IntPoint
+from org.apache.lucene.document import Document, IntPoint
 from org.apache.lucene.index import DirectoryReader, Term
 from org.apache.lucene.queryparser.classic import MultiFieldQueryParser, QueryParser, QueryParserBase
 from org.apache.lucene.search import BooleanClause, BooleanQuery, IndexSearcher, MatchAllDocsQuery, Query, TermQuery
@@ -14,6 +14,7 @@ from org.apache.lucene.search.similarities import BM25Similarity, ClassicSimilar
 from org.apache.lucene.store import FSDirectory
 
 from common.log import log_error, log_info
+from constants.join import JOIN_MATCH_WIKI_ONLY
 from constants.lucene import LUCENE_SEARCH_BOOSTS, LUCENE_VM_ARGS
 from indexer.lucene_analysis import fold, make_analyzer
 from indexer.lucene_query import NumericClause, extract_numeric_clauses
@@ -69,6 +70,22 @@ def build_query(
     return builder.build()
 
 
+def describe_hit(document: Document) -> str:
+    """Athletes: id, name, sports. wiki_only: page title (no athlete_id, no results)."""
+    doc_id = document.get("doc_id") or document.get("athlete_id") or "?"
+    name = document.get("full_name") or document.get("wiki_title") or "?"
+    born = document.get("born_year") or "?"
+    medals = document.get("medals_total") or "0"
+    match_type = document.get("match_type") or "?"
+
+    if match_type == JOIN_MATCH_WIKI_ONLY:
+        details = f"wiki: {document.get('wiki_title')}"
+    else:
+        details = document.get("sports") or "no results"
+
+    return f"{doc_id:>9}  {name}  (b. {born}, medals {medals}, {details}) [{match_type}]"
+
+
 def run_lucene_search(
     text: str, top_k: int, require_all: bool, similarity: str, k1: float, b: float,
     sport_medals: list[str], discipline_medals: list[str], index_dir: str,
@@ -97,14 +114,10 @@ def run_lucene_search(
         hits = searcher.search(query, top_k).scoreDocs
         stored = searcher.storedFields()
         log_info(f"query: {query}")
-        log_info(f"{searcher.count(query)} matching athletes, showing {len(hits)} ({similarity}, {'AND' if require_all else 'OR'})")
+        log_info(f"{searcher.count(query)} matching documents, showing {len(hits)} ({similarity}, {'AND' if require_all else 'OR'})")
 
         for position, hit in enumerate(hits, start=1):
-            document = stored.document(hit.doc)
-            born = document.get("born_year") or "?"
-            medals = document.get("medals_total") or "0"
-            print(f"{position:>3}. {hit.score:8.4f}  {document.get('athlete_id'):>8}  {document.get('full_name')}  "
-                  f"(b. {born}, medals {medals}, {document.get('sports')})")
+            print(f"{position:>3}. {hit.score:8.4f}  {describe_hit(stored.document(hit.doc))}")
     finally:
         reader.close()
 

@@ -1,7 +1,7 @@
 import argparse
 import sys
 from constants.extractor import ATHLETES_TSV_PATH, RESULTS_TSV_PATH
-from constants.join import WIKI_JOIN_PATH
+from constants.join import WIKI_JOIN_FULL_PATH, WIKI_JOIN_PATH
 from constants.lucene import (
     LUCENE_BM25_B,
     LUCENE_BM25_K1,
@@ -117,6 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
     wiki_join.add_argument("--people", default=WIKI_PEOPLE_PATH)
     wiki_join.add_argument("--athletes", default=ATHLETES_TSV_PATH)
     wiki_join.add_argument("--output", default=WIKI_JOIN_PATH)
+    wiki_join.add_argument(
+        "--full-output",
+        default=WIKI_JOIN_FULL_PATH,
+        help="matched + Olympedia-only + Olympic Wikipedia-only rows, column match_type",
+    )
 
     extract_spark = subparsers.add_parser(
         "extract-spark",
@@ -130,11 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     lucene_export = subparsers.add_parser(
         "lucene-export",
-        help="Spark: athletes + results + best Wikipedia page of the join -> one TSV row per athlete for the Lucene index",
+        help="Spark: athletes + results + best Wikipedia page, plus Olympic Wikipedia-only pages -> one TSV row per Lucene document",
     )
     lucene_export.add_argument("--athletes", default=ATHLETES_TSV_PATH)
     lucene_export.add_argument("--results", default=RESULTS_TSV_PATH)
-    lucene_export.add_argument("--joined", default=WIKI_JOIN_PATH)
+    lucene_export.add_argument("--joined", default=WIKI_JOIN_FULL_PATH)
     lucene_export.add_argument("--output", default=LUCENE_DOCS_PATH)
 
     lucene_index = subparsers.add_parser(
@@ -233,7 +238,7 @@ def main() -> int:
 
     if args.command == "wiki-join":
         from wiki.join import run_join
-        return run_join(args.people, args.athletes, args.output)
+        return run_join(args.people, args.athletes, args.output, args.full_output)
 
     if args.command == "extract-spark":
         from extractor.spark_job import run_spark_extractor

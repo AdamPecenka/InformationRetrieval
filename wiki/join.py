@@ -5,6 +5,8 @@ Tiers, best first:
   1  name + date  normalised name match and equal full birth date
   2  name + year  normalised name match and equal birth year
 Name alone is not a tier (too ambiguous), only reported. Olympedia side is small -> always broadcast.
+Full output: matched pairs + unmatched athletes + unmatched Olympic-flagged person pages (anti-joins + union,
+a real full outer join over 2 M pages can't be broadcast).
 """
 from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
@@ -15,6 +17,9 @@ from constants.join import (
     JOIN_BIRTH_YEAR_TOLERANCE,
     JOIN_HEIGHT_TOLERANCE_CM,
     JOIN_ID_YEAR_TOLERANCE,
+    JOIN_MATCH_BOTH,
+    JOIN_MATCH_OLYMPEDIA_ONLY,
+    JOIN_MATCH_WIKI_ONLY,
     JOIN_WEIGHT_TOLERANCE_KG,
 )
 from regexes.join import JOIN_FULL_DATE_REGEX, JOIN_TITLE_SUFFIX_REGEX, JOIN_YEAR_REGEX
@@ -22,6 +27,7 @@ from wiki.audit import read_athletes
 from wiki.dump import build_spark
 from wiki.inputs import require_dir, require_file
 from wiki.names import normalize_name, was_repaired
+from wiki.relevance import OLYMPIC_FLAGS, any_of
 
 _normalize_udf = F.udf(normalize_name, StringType())
 
@@ -243,8 +249,8 @@ def report_against_gold(by_id: DataFrame, by_name: DataFrame) -> None:
         log_info(f"gold check, name tiers: recall {recalled}/{gold_total} = {100.0 * recalled / gold_total:.1f}%")
 
 
-def build_joined(pairs: DataFrame, athletes: DataFrame, people: DataFrame) -> DataFrame:
-    left = athletes.select(
+def athlete_side(athletes: DataFrame) -> DataFrame:
+    return athletes.select(
         "athlete_id",
         F.col("used_name"), F.col("full_name"), F.col("born_date"), F.col("born_year"), F.col("born_place"), F.col("died_date"),
         F.col("nationality_names"),
@@ -252,7 +258,10 @@ def build_joined(pairs: DataFrame, athletes: DataFrame, people: DataFrame) -> Da
         F.col("weight_kg").cast("double").alias("olympedia_weight_kg"),
         F.col("medals_gold"), F.col("medals_silver"), F.col("medals_bronze"),
     )
-    right = people.select(
+
+
+def wiki_side(people: DataFrame) -> DataFrame:
+    return people.select(
         *[F.col(column) for column in WIKI_COLUMNS if column not in ("height_cm", "weight_kg", "olympedia_id")],
         F.col("birth_year").alias("infobox_year"),
         F.col("category_birth_year").alias("category_year"),
@@ -260,7 +269,10 @@ def build_joined(pairs: DataFrame, athletes: DataFrame, people: DataFrame) -> Da
         F.col("weight_kg").alias("wiki_weight_kg"),
         F.col("olympedia_id").alias("wiki_olympedia_id"),
     )
-    joined = pairs.join(F.broadcast(left), "athlete_id").join(right, "page_id")
+
+
+def build_joined(pairs: DataFrame, athletes: DataFrame, people: DataFrame) -> DataFrame:
+    joined = pairs.join(F.broadcast(athlete_side(athletes)), "athlete_id").join(wiki_side(people), "page_id")
 
     # Diffs are null when a side has no value.
     return (
@@ -275,6 +287,71 @@ def build_joined(pairs: DataFrame, athletes: DataFrame, people: DataFrame) -> Da
         .withColumn("height_conflict", F.col("height_diff_cm") > JOIN_HEIGHT_TOLERANCE_CM)
         .withColumn("weight_conflict", F.col("weight_diff_kg") > JOIN_WEIGHT_TOLERANCE_KG)
     )
+
+
+def build_full(joined: DataFrame, athletes: DataFrame, people: DataFrame, conflicts: DataFrame) -> DataFrame:
+    """joined rows (both) + unmatched athletes + unmatched Olympic-flagged pages, columns of the missing side null.
+    id_conflict: the page cites an Olympedia id whose birth year doesn't fit (set aside by the tiers)."""
+    matched_athletes = joined.select("athlete_id").distinct()
+    matched_pages = joined.select("page_id").distinct()
+
+    both = joined.withColumn("match_type", F.lit(JOIN_MATCH_BOTH))
+    olympedia_only = (
+        athlete_side(athletes)
+        .join(F.broadcast(matched_athletes), "athlete_id", "left_anti")
+        .withColumn("match_type", F.lit(JOIN_MATCH_OLYMPEDIA_ONLY))
+    )
+    wiki_only = (
+        wiki_side(people.filter(any_of(OLYMPIC_FLAGS)))
+        .join(F.broadcast(matched_pages), "page_id", "left_anti")
+        .withColumn("match_type", F.lit(JOIN_MATCH_WIKI_ONLY))
+    )
+    full = (
+        both
+        .unionByName(olympedia_only, allowMissingColumns=True)
+        .unionByName(wiki_only, allowMissingColumns=True)
+    )
+    conflict_pages = conflicts.select("page_id").distinct().withColumn("id_conflict", F.lit(True))
+
+    return (
+        full
+        .join(F.broadcast(conflict_pages), "page_id", "left")
+        .withColumn("id_conflict", F.coalesce(F.col("id_conflict"), F.lit(False)))
+    )
+
+
+def report_full(full: DataFrame, athlete_count: int) -> bool:
+    """Counts per match_type; False when both + olympedia_only don't cover every athlete exactly once."""
+    rows = full.groupBy("match_type").agg(
+        F.count(F.lit(1)).alias("rows"),
+        F.countDistinct("athlete_id").alias("athletes"),
+        F.countDistinct("page_id").alias("pages"),
+        F.sum(F.col("id_conflict").cast("int")).alias("id_conflicts"),
+    ).collect()
+    by_type = {row["match_type"]: row for row in rows}
+
+    log_info("full join per match_type: rows / athletes / wikipedia pages / id-conflict pages")
+
+    for match_type in (JOIN_MATCH_BOTH, JOIN_MATCH_OLYMPEDIA_ONLY, JOIN_MATCH_WIKI_ONLY):
+        row = by_type.get(match_type)
+
+        if row is None:
+            log_info(f"  {match_type}: 0")
+            continue
+
+        log_info(f"  {match_type}: {row['rows']} / {row['athletes']} / {row['pages']} / {row['id_conflicts']}")
+
+    covered = 0
+
+    for match_type in (JOIN_MATCH_BOTH, JOIN_MATCH_OLYMPEDIA_ONLY):
+        if match_type in by_type:
+            covered += by_type[match_type]["athletes"]
+
+    if covered != athlete_count:
+        log_error(f"both + olympedia_only cover {covered} athletes, athletes.tsv has {athlete_count}")
+        return False
+
+    return True
 
 
 def report_gaps_filled(joined: DataFrame) -> None:
@@ -327,12 +404,12 @@ def _percent(part: int, whole: int) -> str:
     return f"{100.0 * part / whole:.1f}%"
 
 
-def run_join(people_path: str, athletes_path: str, output_path: str) -> int:
+def run_join(people_path: str, athletes_path: str, output_path: str, full_output_path: str) -> int:
     if not require_dir(people_path) or not require_file(athletes_path):
         return 1
 
-    if people_path == output_path:
-        log_error("people and output are the same path, overwrite would delete the input")
+    if people_path in (output_path, full_output_path) or output_path == full_output_path:
+        log_error("people, output and full output must be different paths, overwrite would delete an input")
         return 1
 
     spark = build_spark(app_name="vinf-wiki-join", with_xml=False)
@@ -375,6 +452,13 @@ def run_join(people_path: str, athletes_path: str, output_path: str) -> int:
             "tier", "athlete_id", "used_name", "title", "born_date", "birth_date", "born_place", "birth_place",
             "olympedia_height_cm", "wiki_height_cm",
         ).orderBy("tier").show(SAMPLE_ROWS, truncate=False)
+
+        full = build_full(written, athletes, people, spark.read.parquet(conflicts_path))
+        log_add(f"writing the full join (both / olympedia_only / wiki_only) to {full_output_path}")
+        full.write.mode("overwrite").parquet(full_output_path)
+
+        if not report_full(spark.read.parquet(full_output_path), _count(athletes)):
+            return 1
     finally:
         spark.stop()
 

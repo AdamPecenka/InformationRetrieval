@@ -5,6 +5,9 @@
 
 - Python 3.10+
 - pip install requests
+- Wikipedia stages: PySpark 3.4, Java 17, on Windows `HADOOP_HOME` with
+  `winutils.exe`. The dump path comes from `VINF_WIKI_DUMP`.
+- Lucene stages: Docker (image `coady/pylucene:10.0.0`)
 
 ## Crawler
 `python main.py crawl`
@@ -104,3 +107,64 @@ that miss a word. The two tf-idf rankings follow the lecture example:
 ### Diagram
 
 ![Diagram](architecture_diagram.png)
+
+## Wikipedia (Spark)
+
+```
+python main.py wiki-parse --input $env:VINF_WIKI_DUMP --output data/wiki/pages_full_parquet
+python main.py wiki-filter
+python main.py wiki-extract
+python main.py wiki-join
+```
+
+| Stage | Output | What it does |
+|---|---|---|
+| `wiki-parse` | `data/wiki/pages_full_parquet` | dump XML -> one row per article, redirects dropped |
+| `wiki-filter` | `data/wiki/pages_relevant_parquet` | keeps a page if any flag fires (person category / infobox, Olympic title / category / medal, Olympedia link); flags kept as columns |
+| `wiki-extract` | `data/wiki/people_parquet` | person pages only: infobox attributes, lead and body text |
+| `wiki-join` | `data/joined_parquet`, `data/joined_full_parquet` | Olympedia athletes <-> Wikipedia people |
+
+`wiki-join` matches in tiers, best first: 0 the page cites the athlete's
+Olympedia id, 1 name + full birth date, 2 name + birth year. Pages citing an id
+whose birth year doesn't fit go to `joined_parquet_conflicts`.
+
+`joined_parquet` holds the matched pairs. `joined_full_parquet` is the full outer
+view restricted to the topic, column `match_type`:
+
+| `match_type` | Rows |
+|---|---|
+| `both` | matched (athlete, page) pairs, same as `joined_parquet` |
+| `olympedia_only` | athletes without a page, Wikipedia columns null |
+| `wiki_only` | person pages with at least one Olympic flag, not matched to any athlete; Olympedia columns null |
+
+`id_conflict` marks the conflict pages. It is built with anti-joins and a union,
+not a Spark full outer join (that can't be broadcast over the 2 M page side).
+
+## Lucene (PyLucene in Docker)
+
+```
+python main.py lucene-export
+.\scripts\run_in_lucene.ps1 main.py lucene-index
+.\scripts\run_in_lucene.ps1 main.py lucene-search "sport:swimming born_year:[1980 TO 1989]"
+.\scripts\run_in_lucene.ps1 main.py lucene-compare
+```
+
+`lucene-export` (host, Spark) writes `data/lucene/docs.tsv`, one row per Lucene
+document: every athlete (results aggregated, best Wikipedia page, gaps in
+height / weight / places filled from Wikipedia) plus every `wiki_only` page.
+`doc_id` is the `athlete_id`, or `w` + page id for `wiki_only`. The container
+only reads this TSV, it needs no Spark. Field kinds (phrase, prose, keyword,
+int) are listed in `constants/lucene.py`.
+
+Search uses classic Lucene syntax: bare words hit the boosted fields of
+`LUCENE_SEARCH_BOOSTS`, `field:word`, phrases, `AND / OR / NOT`, fuzzy `~`,
+prefix `*`, and numeric ranges such as `medals_total:[3 TO *]`. Filters:
+`match_type:wiki_only` or `-match_type:wiki_only` (athletes only),
+`--sport-medal aquatics:gold`, `--discipline-medal swimming:gold`.
+
+`lucene-compare` runs the test queries of `indexer/lucene_truth.py` against the
+own index and the Lucene index (precision / recall, rank of a known athlete,
+latency). It compares athletes only: `wiki_only` documents are excluded, the
+own index doesn't contain them.
+
+![Lucene pipeline](lucene_pipeline.png)

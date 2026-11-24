@@ -1,5 +1,7 @@
 # Runs in the PyLucene container (the own index is stdlib only, so it runs there too).
 # Set cases -> precision / recall vs lucene_truth, rank cases -> rank of the known athlete.
+# Athletes only: the own index and the truth know no wiki_only pages, so they are dropped from the truth rows
+# and excluded from every Lucene query (MUST_NOT, no effect on scores; idf / avgdl still see the whole index).
 import contextlib
 import io
 import os
@@ -8,14 +10,15 @@ from typing import Callable, Optional
 
 import lucene  # noqa: F401  before any java / org.apache import
 from java.nio.file import Paths
-from org.apache.lucene.index import DirectoryReader
-from org.apache.lucene.search import IndexSearcher
+from org.apache.lucene.index import DirectoryReader, Term
+from org.apache.lucene.search import BooleanClause, BooleanQuery, IndexSearcher, Query, TermQuery
 from org.apache.lucene.search.similarities import BM25Similarity, ClassicSimilarity
 from org.apache.lucene.store import FSDirectory
 
 from common.log import log_error, log_info
-from common.tsv import format_row, read_rows
+from common.tsv import format_row, iter_rows
 from constants.indexer import INDEX_DICTIONARY_PATH, INDEX_DIR, INDEX_DOCS_PATH, INDEX_POSTINGS_PATH
+from constants.join import JOIN_MATCH_WIKI_ONLY
 from constants.lucene import (
     LUCENE_BM25_B,
     LUCENE_BM25_K1,
@@ -58,12 +61,37 @@ def precision_recall(found: set[str], truth: set[str]) -> tuple[Optional[float],
     return precision, recall
 
 
+def read_athlete_rows(docs_path: str) -> tuple[list[dict[str, str]], int]:
+    """(non-wiki_only rows, all well-formed rows), streamed."""
+    athletes: list[dict[str, str]] = []
+    total = 0
+
+    for fields in iter_rows(docs_path, LUCENE_DOC_COLUMNS):
+        if fields is None:
+            continue
+
+        total += 1
+        row = dict(zip(LUCENE_DOC_COLUMNS, fields))
+
+        if row["match_type"] != JOIN_MATCH_WIKI_ONLY:
+            athletes.append(row)
+
+    return athletes, total
+
+
+def athletes_only(query: Query) -> Query:
+    builder = BooleanQuery.Builder()
+    builder.add(query, BooleanClause.Occur.MUST)
+    builder.add(TermQuery(Term("match_type", JOIN_MATCH_WIKI_ONLY)), BooleanClause.Occur.MUST_NOT)
+    return builder.build()
+
+
 def old_matches(reader: IndexReader, words: str) -> set[str]:
     return {reader.athlete_ids[doc_id] for doc_id in documents_with_all_terms(reader, words)}
 
 
 def new_matches(searcher: IndexSearcher, case: SetCase, limit: int) -> list[str]:
-    query = build_query(case.new_query, make_parser(True), [], case.new_discipline_medals)
+    query = athletes_only(build_query(case.new_query, make_parser(True), [], case.new_discipline_medals))
     hits = searcher.search(query, limit).scoreDocs
     stored = searcher.storedFields()
     return [stored.document(hit.doc).get("athlete_id") for hit in hits]
@@ -105,7 +133,7 @@ def old_rank(reader: IndexReader, case: RankCase, method: str) -> Optional[int]:
 
 
 def new_rank(searcher: IndexSearcher, case: RankCase, limit: int) -> Optional[int]:
-    query = build_query(case.query, make_parser(True), [], [])
+    query = athletes_only(build_query(case.query, make_parser(True), [], []))
     stored = searcher.storedFields()
 
     for position, hit in enumerate(searcher.search(query, limit).scoreDocs, start=1):
@@ -145,8 +173,7 @@ def run_lucene_compare(docs_path: str, index_dir: str, repeats: int) -> int:
         log_error(f"no Lucene index in {index_dir}, run: python main.py lucene-index")
         return 1
 
-    raw_rows, _ = read_rows(docs_path, LUCENE_DOC_COLUMNS)
-    rows = [dict(zip(LUCENE_DOC_COLUMNS, fields)) for fields in raw_rows]
+    rows, document_count = read_athlete_rows(docs_path)
 
     lucene.initVM(vmargs=LUCENE_VM_ARGS)
     reader = IndexReader()
@@ -158,9 +185,9 @@ def run_lucene_compare(docs_path: str, index_dir: str, repeats: int) -> int:
 
         log_info(f"own index: {reader.n_docs} documents, {directory_size(INDEX_DIR) / 1_000_000:.1f} MB")
         log_info(f"Lucene index: {lucene_reader.numDocs()} documents, {directory_size(index_dir) / 1_000_000:.1f} MB")
-        log_info(f"docs.tsv: {len(rows)} athletes. Latency = mean of {repeats} runs, parsing included")
+        log_info(f"docs.tsv: {document_count} documents, {len(rows)} athletes compared. Latency = mean of {repeats} runs, parsing included")
 
-        if reader.n_docs != len(rows) or lucene_reader.numDocs() != len(rows):
+        if reader.n_docs != len(rows) or lucene_reader.numDocs() != document_count:
             log_error("the indexes and docs.tsv differ in size, rebuild both from the same data")
             return 1
 

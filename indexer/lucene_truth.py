@@ -1,5 +1,6 @@
 # Comparison test cases. Truth is computed from docs.tsv, independent of both indexes.
 # Uses the own index's tokenizer so a word means the same in the truth and the old index.
+# Rows are athletes only (lucene_compare drops match_type wiki_only), like-for-like with the own index.
 from dataclasses import dataclass
 from typing import Callable, Optional
 

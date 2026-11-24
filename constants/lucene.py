@@ -11,7 +11,11 @@ LUCENE_INDEX_DIR: str = os.path.join(LUCENE_DIR, "index")
 
 LUCENE_VM_ARGS: list[str] = ["-Djava.awt.headless=true"]
 
-# docs.tsv: one row = one athlete = one Lucene document.
+# docs.tsv: one row = one Lucene document = one athlete (both / olympedia_only) or one Wikipedia page (wiki_only).
+# doc_id: athlete_id, or "w" + wiki_page_id for wiki_only. match_type: constants/join.py JOIN_MATCH_*.
+LUCENE_KEY_COLUMNS: list[str] = ["doc_id", "match_type"]
+LUCENE_WIKI_DOC_PREFIX: str = "w"
+
 LUCENE_YEAR_COLUMNS: list[str] = ["born_year", "died_year"]
 
 # Distinct values over the athlete's results rows. *_medals are lower-case "sport:medal" pairs,
@@ -21,14 +25,15 @@ LUCENE_RESULT_COLUMNS: list[str] = [
     "sport_medals", "discipline_medals",
 ]
 
-# Best (lowest tier) Wikipedia page of the join, empty if none.
+# Best (lowest tier) Wikipedia page of the join, empty if none. wiki_only: the page itself.
 LUCENE_WIKI_COLUMNS: list[str] = [
     "wiki_page_id", "wiki_tier", "wiki_title", "wiki_sport", "wiki_nationality", "wiki_lead", "wiki_body",
 ]
 
 # height_cm, weight_kg, born_place, died_place are filled from Wikipedia where Olympedia has none.
+# wiki_only rows: athlete_id and the results columns stay empty.
 LUCENE_DOC_COLUMNS: list[str] = (
-    ATHLETE_COLUMNS + LUCENE_YEAR_COLUMNS + LUCENE_RESULT_COLUMNS + LUCENE_WIKI_COLUMNS
+    LUCENE_KEY_COLUMNS + ATHLETE_COLUMNS + LUCENE_YEAR_COLUMNS + LUCENE_RESULT_COLUMNS + LUCENE_WIKI_COLUMNS
 )
 
 # Index schema. Values and queries both go through strip_accents.
@@ -70,6 +75,8 @@ LUCENE_KEYWORD_FIELDS: dict[str, str] = {
     "season": "seasons",
     "sport_medal": "sport_medals",
     "discipline_medal": "discipline_medals",
+    "match_type": "match_type",
+    "wiki_page_id": "wiki_page_id",
 }
 
 # IntPoint + StoredField.
@@ -113,7 +120,7 @@ LUCENE_SEARCH_BOOSTS: dict[str, float] = {
 LUCENE_BM25_K1: float = 1.2
 LUCENE_BM25_B: float = 0.75
 
-LUCENE_PROGRESS_EVERY_DOCS: int = 2000
+LUCENE_PROGRESS_EVERY_DOCS: int = 20000
 
 # Own index vs Lucene comparison.
 LUCENE_COMPARISON_PATH: str = os.path.join(LUCENE_DIR, "comparison.tsv")

@@ -9,7 +9,7 @@ from org.apache.lucene.index import DirectoryReader, IndexWriter, IndexWriterCon
 from org.apache.lucene.store import FSDirectory
 
 from common.log import log_add, log_alert, log_error, log_info
-from common.tsv import read_rows
+from common.tsv import iter_rows
 from constants.lucene import (
     LUCENE_DOC_COLUMNS,
     LUCENE_INT_FIELDS,
@@ -27,13 +27,18 @@ from indexer.lucene_values import split_values, to_int
 
 
 def build_document(row: dict[str, str]) -> Document:
-    """One athlete -> one document, field kinds in constants/lucene.py."""
+    """One docs.tsv row -> one document, field kinds in constants/lucene.py. Empty values are skipped."""
     document = Document()
 
-    # Printed by the search; only athlete_id is searchable.
-    document.add(StringField("athlete_id", row["athlete_id"], Field.Store.YES))
-    document.add(StoredField("full_name", row["full_name"]))
-    document.add(StoredField("sports", row["sports"]))
+    # Keys, searchable. athlete_id is empty for wiki_only.
+    for key in ("doc_id", "athlete_id"):
+        if row[key] != "":
+            document.add(StringField(key, row[key], Field.Store.YES))
+
+    # Printed by the search.
+    for column in ("match_type", "full_name", "sports", "wiki_title"):
+        if row[column] != "":
+            document.add(StoredField(column, row[column]))
 
     for column in LUCENE_NAME_COLUMNS:
         for value in split_values(row[column]):
@@ -83,17 +88,6 @@ def run_lucene_indexer(docs_path: str, index_dir: str) -> int:
         log_error(f"{docs_path} not found, run `python main.py lucene-export` on the host first")
         return 1
 
-    rows, skipped = read_rows(docs_path, LUCENE_DOC_COLUMNS)
-
-    if skipped > 0:
-        log_alert(f"skipped {skipped} malformed rows in {docs_path}")
-
-    if len(rows) == 0:
-        log_error("no documents to index")
-        return 1
-
-    log_info(f"{len(rows)} documents read from {docs_path}")
-
     lucene.initVM(vmargs=LUCENE_VM_ARGS)
     log_info(f"lucene {lucene.VERSION}")
 
@@ -103,12 +97,20 @@ def run_lucene_indexer(docs_path: str, index_dir: str) -> int:
     config.setOpenMode(IndexWriterConfig.OpenMode.CREATE)
     writer = IndexWriter(directory, config)
     started = time.perf_counter()
+    added = 0
+    skipped = 0
 
-    for position, fields in enumerate(rows, start=1):
+    # Streamed: docs.tsv with the wiki_only bodies is too big to hold in memory.
+    for fields in iter_rows(docs_path, LUCENE_DOC_COLUMNS):
+        if fields is None:
+            skipped += 1
+            continue
+
         writer.addDocument(build_document(dict(zip(LUCENE_DOC_COLUMNS, fields))))
+        added += 1
 
-        if position % LUCENE_PROGRESS_EVERY_DOCS == 0:
-            log_add(f"{position} documents indexed")
+        if added % LUCENE_PROGRESS_EVERY_DOCS == 0:
+            log_add(f"{added} documents indexed")
 
     writer.commit()
     writer.close()
@@ -119,10 +121,17 @@ def run_lucene_indexer(docs_path: str, index_dir: str) -> int:
     reader.close()
     directory.close()
 
+    if skipped > 0:
+        log_alert(f"skipped {skipped} malformed rows in {docs_path}")
+
+    if added == 0:
+        log_error(f"no documents in {docs_path}")
+        return 1
+
     log_info(f"done: {indexed} documents in {elapsed:.1f} s, index size {directory_size(index_dir) / 1_000_000:.1f} MB in {index_dir}")
 
-    if indexed != len(rows):
-        log_error(f"{len(rows)} rows read but {indexed} documents in the index")
+    if indexed != added:
+        log_error(f"{added} rows read but {indexed} documents in the index")
         return 1
 
     return 0

@@ -73,7 +73,7 @@ def _add_olympedia_id(flagged: DataFrame) -> DataFrame:
     )
 
 
-def _any_of(names: list[str]) -> Column:
+def any_of(names: list[str]) -> Column:
     condition = F.col(names[0])
 
     for name in names[1:]:
@@ -83,13 +83,13 @@ def _any_of(names: list[str]) -> Column:
 
 
 def keep_relevant(flagged: DataFrame) -> DataFrame:
-    return flagged.filter(_any_of(FLAG_COLUMNS))
+    return flagged.filter(any_of(FLAG_COLUMNS))
 
 
 def summarize(kept: DataFrame) -> dict[str, int]:
     """Per flag: pages it fires on, and pages kept only because of it. One pass."""
-    person = _any_of(PERSON_FLAGS)
-    olympic = _any_of(OLYMPIC_FLAGS)
+    person = any_of(PERSON_FLAGS)
+    olympic = any_of(OLYMPIC_FLAGS)
 
     aggregations: list[Column] = [F.count(F.lit(1)).alias("kept")]
 
@@ -97,7 +97,7 @@ def summarize(kept: DataFrame) -> dict[str, int]:
         others = [other for other in FLAG_COLUMNS if other != name]
 
         aggregations.append(F.sum(F.col(name).cast("int")).alias(name))
-        aggregations.append(F.sum((F.col(name) & ~_any_of(others)).cast("int")).alias(f"only_{name}"))
+        aggregations.append(F.sum((F.col(name) & ~any_of(others)).cast("int")).alias(f"only_{name}"))
 
     aggregations.append(F.sum((person & ~olympic).cast("int")).alias("person_not_olympic"))
     aggregations.append(F.sum((olympic & ~person).cast("int")).alias("olympic_not_person"))
@@ -144,8 +144,8 @@ def _log_counts(counts: dict[str, int], total: int) -> None:
 
 
 def _log_samples(kept: DataFrame) -> None:
-    person = _any_of(PERSON_FLAGS)
-    olympic = _any_of(OLYMPIC_FLAGS)
+    person = any_of(PERSON_FLAGS)
+    olympic = any_of(OLYMPIC_FLAGS)
 
     log_info(f"random sample of {SAMPLE_SIZE} Olympic pages without a person signal:")
     (
@@ -172,7 +172,7 @@ def _log_samples(kept: DataFrame) -> None:
     # What each rule alone catches -> is it worth keeping.
     for name in FLAG_COLUMNS:
         others = [other for other in FLAG_COLUMNS if other != name]
-        only_this = kept.filter(F.col(name) & ~_any_of(others)).select("title").limit(SAMPLE_PER_FLAG)
+        only_this = kept.filter(F.col(name) & ~any_of(others)).select("title").limit(SAMPLE_PER_FLAG)
         titles = [row["title"] for row in only_this.collect()]
 
         if len(titles) > 0:
