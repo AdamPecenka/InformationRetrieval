@@ -37,28 +37,31 @@ LUCENE_DOC_COLUMNS: list[str] = (
 )
 
 # Index schema. Values and queries both go through strip_accents.
-LUCENE_NAME_FIELD: str = "name"
-LUCENE_NAME_COLUMNS: list[str] = ["full_name", "used_name", "other_names", "original_name", "nickname"]
+# Only doc_id is an indexed key; athlete_id, match_type, full_name, sports, wiki_title are also stored for printing.
 
-# TextField + StandardAnalyzer. index field -> docs.tsv column.
-LUCENE_PHRASE_FIELDS: dict[str, str] = {
-    "born_place": "born_place",
-    "born_country": "born_country",
-    "died_place": "died_place",
-    "died_country": "died_country",
-    "affiliations": "affiliations",
-    "noc_names": "noc_names",
-    "nationality_names": "nationality_names",
-    "roles": "roles",
-    "other_participations": "other_participations",
-    "sport": "sports",
-    "discipline": "disciplines",
-    "event": "events",
-    "games": "games",
-    "medal": "result_medals",
-    "wiki_title": "wiki_title",
-    "wiki_sport": "wiki_sport",
-    "wiki_nationality": "wiki_nationality",
+# A field fed by several columns gets each value once (compared accent- and case-insensitively, first kept).
+# Title columns lose their disambiguation suffix first: "John Davis (swimmer)" -> "John Davis".
+LUCENE_TITLE_COLUMNS: list[str] = ["wiki_title"]
+
+LUCENE_NAME_FIELD: str = "name"
+LUCENE_NAME_COLUMNS: list[str] = ["full_name", "used_name", "other_names", "original_name", "nickname", "wiki_title"]
+
+# TextField + StandardAnalyzer. index field -> docs.tsv columns (Olympedia first, then Wikipedia).
+LUCENE_PHRASE_FIELDS: dict[str, list[str]] = {
+    "born_place": ["born_place"],
+    "born_country": ["born_country"],
+    "died_place": ["died_place"],
+    "died_country": ["died_country"],
+    "affiliations": ["affiliations"],
+    "noc_names": ["noc_names"],
+    "nationality_names": ["nationality_names", "wiki_nationality"],
+    "roles": ["roles"],
+    "other_participations": ["other_participations"],
+    "sport": ["sports", "wiki_sport"],
+    "discipline": ["disciplines"],
+    "event": ["events"],
+    "games": ["games"],
+    "medal": ["result_medals"],
 }
 
 # TextField + EnglishAnalyzer (stemming, stop words).
@@ -76,7 +79,6 @@ LUCENE_KEYWORD_FIELDS: dict[str, str] = {
     "sport_medal": "sport_medals",
     "discipline_medal": "discipline_medals",
     "match_type": "match_type",
-    "wiki_page_id": "wiki_page_id",
 }
 
 # IntPoint + StoredField.
@@ -96,7 +98,6 @@ LUCENE_INT_LIST_FIELDS: dict[str, str] = {"result_year": "result_years"}
 # Fields a bare query word hits, with boosts.
 LUCENE_SEARCH_BOOSTS: dict[str, float] = {
     "name": 3.0,
-    "wiki_title": 2.0,
     "sport": 1.5,
     "affiliations": 1.5,
     "discipline": 1.0,

@@ -23,29 +23,26 @@ from constants.lucene import (
     LUCENE_VM_ARGS,
 )
 from indexer.lucene_analysis import fold, make_analyzer
-from indexer.lucene_values import split_values, to_int
+from indexer.lucene_values import field_values, split_values, to_int
 
 
 def build_document(row: dict[str, str]) -> Document:
     """One docs.tsv row -> one document, field kinds in constants/lucene.py. Empty values are skipped."""
     document = Document()
 
-    # Keys, searchable. athlete_id is empty for wiki_only.
-    for key in ("doc_id", "athlete_id"):
-        if row[key] != "":
-            document.add(StringField(key, row[key], Field.Store.YES))
+    # The only indexed key.
+    document.add(StringField("doc_id", row["doc_id"], Field.Store.YES))
 
-    # Printed by the search.
-    for column in ("match_type", "full_name", "sports", "wiki_title"):
+    # Stored only: read by lucene_compare (athlete_id) and printed by the search. athlete_id is empty for wiki_only.
+    for column in ("athlete_id", "match_type", "full_name", "sports", "wiki_title"):
         if row[column] != "":
             document.add(StoredField(column, row[column]))
 
-    for column in LUCENE_NAME_COLUMNS:
-        for value in split_values(row[column]):
-            document.add(TextField(LUCENE_NAME_FIELD, fold(value), Field.Store.NO))
+    for value in field_values(row, LUCENE_NAME_COLUMNS):
+        document.add(TextField(LUCENE_NAME_FIELD, fold(value), Field.Store.NO))
 
-    for field, column in LUCENE_PHRASE_FIELDS.items():
-        for value in split_values(row[column]):
+    for field, columns in LUCENE_PHRASE_FIELDS.items():
+        for value in field_values(row, columns):
             document.add(TextField(field, fold(value), Field.Store.NO))
 
     for field in LUCENE_PROSE_FIELDS:

@@ -1,11 +1,13 @@
 # Comparison test cases. Truth is computed from docs.tsv, independent of both indexes.
 # Uses the own index's tokenizer so a word means the same in the truth and the old index.
 # Rows are athletes only (lucene_compare drops match_type wiki_only), like-for-like with the own index.
+# Text checks go by index field and read the same columns the builder folds into it (constants/lucene.py),
+# e.g. sport = sports + wiki_sport, so the truth matches what the field can match.
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from constants.lucene import LUCENE_NAME_COLUMNS
-from indexer.lucene_values import split_values, to_int
+from constants.lucene import LUCENE_NAME_COLUMNS, LUCENE_PHRASE_FIELDS
+from indexer.lucene_values import field_values, split_values, to_int
 from indexer.text import tokenize
 
 Row = dict[str, str]
@@ -30,13 +32,17 @@ class RankCase:
     athlete_id: str
 
 
-def has_token(row: Row, column: str, token: str) -> bool:
-    return token in tokenize(row[column])
+def has_token(row: Row, field: str, token: str) -> bool:
+    for value in field_values(row, LUCENE_PHRASE_FIELDS[field]):
+        if token in tokenize(value):
+            return True
+
+    return False
 
 
-def has_phrase(row: Row, column: str, phrase: list[str]) -> bool:
-    """Adjacent tokens within one list value."""
-    for value in split_values(row[column]):
+def has_phrase(row: Row, field: str, phrase: list[str]) -> bool:
+    """Adjacent tokens within one value of the field."""
+    for value in field_values(row, LUCENE_PHRASE_FIELDS[field]):
         tokens = tokenize(value)
 
         for start in range(len(tokens) - len(phrase) + 1):
@@ -49,8 +55,8 @@ def has_phrase(row: Row, column: str, phrase: list[str]) -> bool:
 def name_tokens(row: Row) -> list[str]:
     tokens: list[str] = []
 
-    for column in LUCENE_NAME_COLUMNS:
-        tokens.extend(tokenize(row[column]))
+    for value in field_values(row, LUCENE_NAME_COLUMNS):
+        tokens.extend(tokenize(value))
 
     return tokens
 
@@ -121,12 +127,12 @@ SET_CASES: list[SetCase] = [
     SetCase(
         "basketball players, at least 200 cm", "range + term", None,
         "discipline:basketball height_cm:[200 TO *]", [],
-        lambda row: has_token(row, "disciplines", "basketball") and int_at_least(row, "height_cm", 200),
+        lambda row: has_token(row, "discipline", "basketball") and int_at_least(row, "height_cm", 200),
     ),
     SetCase(
         "gymnasts who were not in Dynamo Moskva", "boolean NOT + phrase", None,
         'sport:gymnastics NOT affiliations:"dynamo moskva"', [],
-        lambda row: has_token(row, "sports", "gymnastics") and not has_phrase(row, "affiliations", ["dynamo", "moskva"]),
+        lambda row: has_token(row, "sport", "gymnastics") and not has_phrase(row, "affiliations", ["dynamo", "moskva"]),
     ),
     SetCase(
         "name misspelled: phelp", "fuzzy (edit distance 1)", "phelp",

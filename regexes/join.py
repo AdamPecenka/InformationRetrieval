@@ -9,3 +9,6 @@ JOIN_MOJIBAKE_PATTERN: re.Pattern[str] = re.compile(r"Ã.|â€")
 JOIN_TITLE_SUFFIX_REGEX: str = r"\s*\([^)]*\)$"   # "John Davis (swimmer)" -> "John Davis"
 JOIN_FULL_DATE_REGEX: str = r"^\d{4}-\d{2}-\d{2}$"
 JOIN_YEAR_REGEX: str = r"^\d{4}"
+
+# Same suffix rule for the Lucene index (container, plain re).
+JOIN_TITLE_SUFFIX_PATTERN: re.Pattern[str] = re.compile(JOIN_TITLE_SUFFIX_REGEX)
